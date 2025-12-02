@@ -41,11 +41,12 @@ def ricker(
     return y
 
 def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_location,dx,dt,pmlthick):
+    dtype=torch.float32
 
     if len(er.shape) != 3 and len(er.shape) == 2:
-        er.unsequeeze_()
+        er.unsqueeze_(-1)
     if len(se.shape) != 3 and len(se.shape) == 2:
-        se.unsequeeze_()
+        se.unsqueeze_(-1)
 
     if er.shape == se.shape:
         nx=er.shape[0]
@@ -111,13 +112,12 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
 
     check_cfl(dx, dt)
     nt=source_apmlitudes.shape[1]
-    dtype=er.dtype
-
+    
 
     pmlthick=pmlthick_revert(pmlthick,er)
-    ere=F.pad(er, (0, 1, 0, 1, 0, 1))
-    see=F.pad(se, (0, 1, 0, 1, 0, 1))
-    mr=F.pad(mr, (0, 1, 0, 1, 0, 1))
+    ere=F.pad(er, (0, 1, 0, 1, 0, 1)).to(dtype)
+    see=F.pad(se, (0, 1, 0, 1, 0, 1)).to(dtype)
+    mr=F.pad(mr, (0, 1, 0, 1, 0, 1)).to(dtype)
 
     return nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_apmlitudes
 
@@ -584,8 +584,14 @@ def calculate_pml_update_coeffs(cfs,R1,R2, aver, avmr, dt,d,thickness):
 
 
 def build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device):
+   
+    (x0EPhi1, x0EPhi2, x0HPhi1, x0HPhi2,
+    xmEPhi1, xmEPhi2, xmHPhi1, xmHPhi2,
+    y0EPhi1, y0EPhi2, y0HPhi1, y0HPhi2,
+    ymEPhi1, ymEPhi2, ymHPhi1, ymHPhi2,
+    z0EPhi1, z0EPhi2, z0HPhi1, z0HPhi2,
+    zmEPhi1, zmEPhi2, zmHPhi1, zmHPhi2) = [torch.empty(0) for _ in range(24)]
 
-    x0EPhi1=x0EPhi2=x0HPhi1=x0HPhi2=xmEPhi1=xmEPhi2=xmHPhi1=xmHPhi2=y0EPhi1=y0EPhi2=y0HPhi1=y0HPhi2=ymEPhi1=ymEPhi2=ymHPhi1=ymHPhi2=z0EPhi1=z0EPhi2=z0HPhi1=z0HPhi2=zmEPhi1=zmEPhi2=zmHPhi1=zmHPhi2=torch.empty(0)
     if PML==None:
         PML=(None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None)
 
@@ -656,3 +662,41 @@ def build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device):
         zmHPhi2=PML[23].contiguous()
 
     return x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2
+
+
+def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None, 
+            source_apmlitudes=None,
+            source_location=None, 
+            receiver_location=None, 
+            er=None, se=None,mr=None, 
+            pmlthick=10):
+    E=None
+    H=None
+    PML=None
+
+    nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_apmlitudes=initialization(device,er,se,mr,source_apmlitudes,source_location,receiver_location,dx,dt,pmlthick)
+
+    Ex,Ey,Ez=create_or_separate(E,nx,ny,nz,nstep,device,dtype)
+    Hx,Hy,Hz=create_or_separate(H,nx,ny,nz,nstep,device,dtype)
+
+    x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2=buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype)
+
+
+    x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2=build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device)
+
+    del x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2
+
+    print(per_nstep)
+    print(nstep)
+    if per_nstep==None:
+        return (Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2)
+    else:
+        return (Ex[:per_nstep,:,:,:],Ey[:per_nstep,:,:,:],Ez[:per_nstep,:,:,:]),(Hx[:per_nstep,:,:,:],Hy[:per_nstep,:,:,:],Hz[:per_nstep,:,:,:]),(x0EPhi1[:per_nstep,:,:,:],x0EPhi2[:per_nstep,:,:,:],x0HPhi1[:per_nstep,:,:,:],x0HPhi2[:per_nstep,:,:,:],xmEPhi1[:per_nstep,:,:,:],xmEPhi2[:per_nstep,:,:,:],xmHPhi1[:per_nstep,:,:,:],xmHPhi2[:per_nstep,:,:,:],y0EPhi1[:per_nstep,:,:,:],y0EPhi2[:per_nstep,:,:,:],y0HPhi1[:per_nstep,:,:,:],y0HPhi2[:per_nstep,:,:,:],ymEPhi1[:per_nstep,:,:,:],ymEPhi2[:per_nstep,:,:,:],ymHPhi1[:per_nstep,:,:,:],ymHPhi2[:per_nstep,:,:,:],z0EPhi1[:per_nstep,:,:,:],z0EPhi2[:per_nstep,:,:,:],z0HPhi1[:per_nstep,:,:,:],z0HPhi2[:per_nstep,:,:,:],zmEPhi1[:per_nstep,:,:,:],zmEPhi2[:per_nstep,:,:,:],zmHPhi1[:per_nstep,:,:,:],zmHPhi2[:per_nstep,:,:,:])
+
+
+def zero_field(*tensors):
+    zeroed_copies = []
+    for t in tensors:
+        if t is not None:
+            zeroed_copies.append(torch.zeros_like(t))
+    return zeroed_copies

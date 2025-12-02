@@ -19,9 +19,9 @@ def compute(device, dx=None, dt=None,
     #receiver_amplitudes: [nstep, nt, nrx] (Only Ez)
     #source_location:[nstep,nsrc,3]
     #receiver_location:[nstep,nrx,3]
-    #E: [3,nx+1,ny+1,nz+1]
-    #H: [3,nx+1,ny+1,nz+1]
-
+    #E: [3,nstep,nx+1,ny+1,nz+1]
+    #H: [3,nstep,nx+1,ny+1,nz+1]
+    #PML: [24,nstep,---,---,---]
     # er = torch.clamp(er, min=1) 
     # se = torch.clamp(se, min=0) 
 
@@ -149,9 +149,12 @@ class DeepGPR(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx,gEx,gEy,gEz,gHx,gHy,gHz,gx0EPhi1,gx0EPhi2,gx0HPhi1,gx0HPhi2,gxmEPhi1,gxmEPhi2,gxmHPhi1,gxmHPhi2,gy0EPhi1,gy0EPhi2,gy0HPhi1,gy0HPhi2,gymEPhi1,gymEPhi2,gymHPhi1,gymHPhi2,gz0EPhi1,gz0EPhi2,gz0HPhi1,gz0HPhi2,gzmEPhi1,gzmEPhi2,gzmHPhi1,gzmHPhi2,gEall,gezreciver):
-
+        
         sourceamp=gezreciver
         er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see=ctx.saved_tensors
+        
+        ere=ere.contiguous()
+        see=see.contiguous()
         er=er.contiguous()
         se=se.contiguous()
         mr=mr.contiguous()
@@ -189,6 +192,7 @@ class DeepGPR(torch.autograd.Function):
         pmlthick=ctx.pmlthick
         device=ctx.device
         Eall=ctx.Eall
+
         Eall=Eall.contiguous()
         gEx=gEx.contiguous()
         gEy=gEy.contiguous()
@@ -307,9 +311,6 @@ class DeepGPR(torch.autograd.Function):
         )
 
 
-        grad_er = grad_er / grad_er.norm()
-        grad_se = grad_se / grad_se.norm()
-
         if tv>0:
             # print("tv")
             if er.requires_grad:
@@ -318,10 +319,10 @@ class DeepGPR(torch.autograd.Function):
                 grad_se=tvnorm(se,grad_se,tv)
 
         ctx.Eall = None
-        # del  Eall,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see
         del Eall,er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see
         del Eupdatecoffs0,Eupdatecoffs1,Eupdatecoffs4,Hupdatecoffs0,Hupdatecoffs1,Hupdatecoffs4
         torch.cuda.empty_cache()
+
         return (
                     grad_er, grad_se,         
                     gEx,gEy,gEz, gHx,gHy,gHz, 

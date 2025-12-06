@@ -110,7 +110,7 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
     elif source_apmlitudes.shape[0]==1 and nsr!=1:
         source_apmlitudes=source_apmlitudes.repeat(nsr,1,1).contiguous()
 
-    check_cfl(dx, dt)
+    check_cfl(dx, dt,nx,ny,nz)
     nt=source_apmlitudes.shape[1]
     
 
@@ -122,12 +122,19 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
     return nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_apmlitudes
 
 
-def check_cfl(dx, dt, dy=None, dz=None):
+def check_cfl(dx, dt, nx,ny,nz):
 
-    if dy is None: dy = dx
-    if dz is None: dz = dx
+    dy=dx
+    dz=dx
 
-    dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dy**2 + 1/dz**2))
+    if nz==1:
+        dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dy**2))
+    if nx==1:
+        dt_max = 1.0 / (c * math.sqrt(1/dy**2 + 1/dz**2))
+    if ny==1:
+        dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dz**2))
+    else:
+        dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dy**2 + 1/dz**2))
 
     if dt > dt_max:
         raise ValueError(f"Does not meet CFL conditions: dt={dt:.3e} > dt_max={dt_max:.3e}")

@@ -129,9 +129,9 @@ def check_cfl(dx, dt, nx,ny,nz):
 
     if nz==1:
         dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dy**2))
-    if nx==1:
+    elif nx==1:
         dt_max = 1.0 / (c * math.sqrt(1/dy**2 + 1/dz**2))
-    if ny==1:
+    elif ny==1:
         dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dz**2))
     else:
         dt_max = 1.0 / (c * math.sqrt(1/dx**2 + 1/dy**2 + 1/dz**2))

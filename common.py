@@ -99,19 +99,22 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
 
         nsr=source_location.shape[1]
         nrx=receiver_location.shape[1]
-        source_apmlitudes=source_apmlitudes.to(device).contiguous()
+        
         source_location=source_location.to(device)
         receiver_location=receiver_location.to(device)
     else:
         raise ValueError('The first dimension (nstep) of source_location and receiver_location should be the same.')
     
+    source_apmlitudes=source_apmlitudes.to(device).contiguous()
+
     if (source_apmlitudes.shape[0]>1 and source_apmlitudes.shape[0]<nsr) or source_apmlitudes.shape[0]>nsr :
         raise ValueError('The number of source waveforms is incorrect.')
-    
     elif source_apmlitudes.shape[0]==1 and nsr!=1:
         source_apmlitudes=source_apmlitudes.repeat(nsr,1,1).contiguous()
+        print('Tips: The number of source waveforms is 1, but the number of sources is ',nsr,'. The source waveform is repeated for all sources.')
 
     check_cfl(dx, dt,nx,ny,nz)
+
     nt=source_apmlitudes.shape[1]
     
 

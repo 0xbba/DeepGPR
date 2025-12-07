@@ -1,7 +1,7 @@
 import torch
 import ctypes
 from . import lib
-from .common import initialization,tvnorm,build_pml_phi,create_or_separate,buildpmlcoeffs,check_tensors_for_nan_inf
+from .common import initialization,build_pml_phi,create_or_separate,buildpmlcoeffs,check_tensors_for_nan_inf
 # torch.LAUNCH_BLOCKING=1
 
 def compute(device, dx=None, dt=None, 
@@ -11,7 +11,7 @@ def compute(device, dx=None, dt=None,
             er=None, se=None,mr=None, 
             E=None,H=None,
             PML=None,
-            pmlthick=10, tv=0, source_direction=2, reciever_direction=2):
+            pmlthick=10, source_direction=2, reciever_direction=2):
     #dx float(m)
     #dt float(s)
     #source_apmlitudes: [nsrc,nt,1](if nsrc=1,all source use the apmlitude)
@@ -36,7 +36,7 @@ def compute(device, dx=None, dt=None,
 
     x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2=build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device)
 
-    Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2,Eall,receiver_amplitudes = DeepGPR.apply(er, se,Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2, mr,dx,nx,ny,nz,dt,nt,nstep,source_apmlitudes,source_location,receiver_location,tv,pmlthick,nsr,nrx,device,dtype,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see,source_direction, reciever_direction)
+    Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2,Eall,receiver_amplitudes = DeepGPR.apply(er, se,Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2, mr,dx,nx,ny,nz,dt,nt,nstep,source_apmlitudes,source_location,receiver_location,pmlthick,nsr,nrx,device,dtype,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see,source_direction, reciever_direction)
 
     return Eall,(Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2),receiver_amplitudes
 
@@ -46,7 +46,7 @@ def compute(device, dx=None, dt=None,
 class DeepGPR(torch.autograd.Function):
     @staticmethod
     def forward(ctx, er, se,Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2, mr,dx,nx,ny,nz,dt,
-                nt,nstep,source_apmlitudes,source_location,receiver_location,tv,
+                nt,nstep,source_apmlitudes,source_location,receiver_location,
                 pmlthick,nsr,nrx,device,dtype,x0,xm,
                 y0,ym,z0,zm,x01,x02,xm1,xm2,
                 y01,y02,ym1,ym2,z01,z02,zm1,zm2,
@@ -54,7 +54,6 @@ class DeepGPR(torch.autograd.Function):
         source_location=source_location.to(torch.int32).contiguous()
         receiver_location=receiver_location.to(torch.int32).contiguous()
         ctx.save_for_backward(er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see)
-        ctx.tv=tv
         ctx.dx=dx
         ctx.nx=nx
         ctx.ny=ny
@@ -124,7 +123,7 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(source_location.data_ptr(), ctypes.POINTER(ctypes.c_int)), ctypes.cast(source_apmlitudes.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 source_direction)
 
-        check_tensors_for_nan_inf(
+        check_tensors_for_nan_inf(d="forward",
             Eall=Eall,Ex=Ex, Ey=Ey, Ez=Ez,
             Hx=Hx, Hy=Hy, Hz=Hz,
             x0EPhi1=x0EPhi1, x0EPhi2=x0EPhi2,
@@ -178,7 +177,6 @@ class DeepGPR(torch.autograd.Function):
         zm1=zm1.contiguous()
         zm2=zm2.contiguous()
 
-        tv=ctx.tv
         dx=ctx.dx
         nx=ctx.nx
         ny=ctx.ny
@@ -293,7 +291,7 @@ class DeepGPR(torch.autograd.Function):
                 2,
                 ctypes.cast(grad_er.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(grad_se.data_ptr(), ctypes.POINTER(ctypes.c_float)),errequiregrad,serequiregrad)
         
-        check_tensors_for_nan_inf(
+        check_tensors_for_nan_inf(d="backward",
             gEx=gEx, gEy=gEy, gEz=gEz,
             gHx=gHx, gHy=gHy, gHz=gHz,
             gx0EPhi1=gx0EPhi1, gx0EPhi2=gx0EPhi2,
@@ -310,17 +308,8 @@ class DeepGPR(torch.autograd.Function):
             gzmHPhi1=gzmHPhi1, gzmHPhi2=gzmHPhi2
         )
 
-
-        if tv>0:
-            # print("tv")
-            if er.requires_grad:
-                grad_er=tvnorm(er,grad_er,tv)
-            if se.requires_grad:
-                grad_se=tvnorm(se,grad_se,tv)
-
         ctx.Eall = None
-        del Eall,er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see
-        del Eupdatecoffs0,Eupdatecoffs1,Eupdatecoffs4,Hupdatecoffs0,Hupdatecoffs1,Hupdatecoffs4
+        del Eall,er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see, Eupdatecoffs0, Eupdatecoffs1, Eupdatecoffs4, Hupdatecoffs0, Hupdatecoffs1, Hupdatecoffs4
         torch.cuda.empty_cache()
 
         return (
@@ -333,7 +322,7 @@ class DeepGPR(torch.autograd.Function):
                     gz0EPhi1,gz0EPhi2,gz0HPhi1,gz0HPhi2,
                     gzmEPhi1,gzmEPhi2,gzmHPhi1,gzmHPhi2,   
                     None, None, None, None, None, None, None, None,   
-                    None, None, None, None, None, None, None, None,
+                    None, None, None, None, None, None, None,
                     None, None, None, None, None, None, None, None,
                     None, None, None, None, None, None, None, None, 
                     None, None, None, None, None, None, None

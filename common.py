@@ -1,11 +1,10 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
 import math
 from scipy.constants import c
 from scipy.constants import mu_0 as m0
 from scipy.constants import epsilon_0 as e0
-import math
 from typing import Optional
 
 def ricker(
@@ -24,10 +23,8 @@ def ricker(
         peak_time: The time (in secs) of the peak amplitude.
         dtype: The PyTorch datatype to use. Optional, defaults to PyTorch's
             default (float32).
-
     Returns:
         A PyTorch tensor representing the Ricker wavelet.
-
     """
     if dt == 0:
         raise ValueError("dt cannot be zero.")
@@ -42,7 +39,11 @@ def ricker(
 
 def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_location,dx,dt,pmlthick):
     dtype=torch.float32
-
+    if er.min()<1 :
+        raise ValueError('The values of epsilon is incorrect.(should be greater than 1)')
+    if se.min()<0:
+        raise ValueError('The values of sigma is incorrect.(should be non-negative)')
+    
     if len(er.shape) != 3 and len(er.shape) == 2:
         er.unsqueeze_(-1)
     if len(se.shape) != 3 and len(se.shape) == 2:
@@ -162,195 +163,236 @@ def pmlthick_revert(p, er):
 
 
 
-def tvnorm(tensor,grad,tv):
-    if tensor.ndim==3 and tensor.shape[2]==1:
-        utensor = total_variation2d(tensor.clone())
-        guer=2*(tensor-utensor)
-        grad += tv*guer
-    else:
-        utensor = total_variation_3d(tensor.clone())
-        guer=2*(tensor-utensor)
-        grad += tv*guer
+class TVRegularization(nn.Module):
+    def __init__(self, weight_ep=0.1, weight_sigma=10, method='anisotropic'):
+
+        super(TVRegularization, self).__init__()
+        self.weight_ep = weight_ep
+        self.weight_sigma = weight_sigma
+        self.method = method
+
+    def _compute_tv(self, data):
+            
+        d_x = data[..., 1:, :, :] - data[..., :-1, :, :]
+        d_y = data[..., :, 1:, :] - data[..., :, :-1, :]
+        is_3d = data.shape[-1] > 1
+        if is_3d:
+            d_z = data[..., :, :, 1:] - data[..., :, :, :-1]
         
-    return grad
+        if self.method == 'anisotropic':
+            loss = torch.sum(torch.abs(d_x)) + torch.sum(torch.abs(d_y))
+            if is_3d:
+                loss += torch.sum(torch.abs(d_z))
+                
+        else:
+            loss = torch.sum(torch.pow(d_x, 2)) + torch.sum(torch.pow(d_y, 2))
+            if is_3d:
+                loss += torch.sum(torch.pow(d_z, 2))
+            loss = torch.sqrt(loss + 1e-8) 
+        return loss / data.numel()
+
+    def forward(self, ep=None, sigma=None):
+        loss = 0.0
+        if ep is not None and self.weight_ep > 0:
+            loss += self.weight_ep * self._compute_tv(ep)
+            
+        if sigma is not None and self.weight_sigma > 0:
+            loss += self.weight_sigma * self._compute_tv(sigma)
+            
+        return loss
 
 
 
-def total_variation2d(data, lamda=0.02, rho=1.0, num_iter=500, tol=1e-5):
-    # 数据归一化
 
-    data.squeeze_(-1)
-    data_max = data.max()
-    normalized_data = data / (data_max + 1e-6)
-    M, N = normalized_data.shape
+# def tvnorm(tensor,grad,tv):
+#     if tensor.ndim==3 and tensor.shape[2]==1:
+#         utensor = total_variation2d(tensor.clone())
+#         guer=2*(tensor-utensor)
+#         grad += tv*guer
+#     else:
+#         utensor = total_variation_3d(tensor.clone())
+#         guer=2*(tensor-utensor)
+#         grad += tv*guer
+        
+#     return grad
 
-    # 初始化变量（带边界）
-    X = torch.zeros((M + 2, N + 2), device=data.device)
-    X[1:-1, 1:-1] = normalized_data
-    Y = X.clone()
 
-    # 辅助变量和乘子
-    Zx = torch.zeros_like(X)
-    Zy = torch.zeros_like(X)
-    Ux = torch.zeros_like(X)
-    Uy = torch.zeros_like(X)
 
-    # 创建四邻域卷积核
-    kernel = torch.tensor([[0, 1, 0],
-                           [1, 0, 1],
-                           [0, 1, 0]], dtype=torch.float32, device=data.device).view(1, 1, 3, 3)
+# def total_variation2d(data, lamda=0.02, rho=1.0, num_iter=500, tol=1e-5):
+#     # 数据归一化
 
-    for _ in range(num_iter):
-        X_prev = X.clone()
+#     data.squeeze_(-1)
+#     data_max = data.max()
+#     normalized_data = data / (data_max + 1e-6)
+#     M, N = normalized_data.shape
 
-        # 计算差分项
-        # 水平方向差分 (循环边界)
-        Dxt_Zx = torch.zeros_like(Zx)
-        Dxt_Zx[:, :-1] = Zx[:, :-1] - Zx[:, 1:]
-        Dxt_Zx[:, -1] = Zx[:, -1] - Zx[:, 0]
+#     # 初始化变量（带边界）
+#     X = torch.zeros((M + 2, N + 2), device=data.device)
+#     X[1:-1, 1:-1] = normalized_data
+#     Y = X.clone()
 
-        # 垂直方向差分 (循环边界)
-        Dyt_Zy = torch.zeros_like(Zy)
-        Dyt_Zy[:-1, :] = Zy[:-1, :] - Zy[1:, :]
-        Dyt_Zy[-1, :] = Zy[-1, :] - Zy[0, :]
+#     # 辅助变量和乘子
+#     Zx = torch.zeros_like(X)
+#     Zy = torch.zeros_like(X)
+#     Ux = torch.zeros_like(X)
+#     Uy = torch.zeros_like(X)
 
-        # 乘子项的差分
-        Dxt_Ux = torch.zeros_like(Ux)
-        Dxt_Ux[:, :-1] = Ux[:, :-1] - Ux[:, 1:]
-        Dxt_Ux[:, -1] = Ux[:, -1] - Ux[:, 0]
+#     # 创建四邻域卷积核
+#     kernel = torch.tensor([[0, 1, 0],
+#                            [1, 0, 1],
+#                            [0, 1, 0]], dtype=torch.float32, device=data.device).view(1, 1, 3, 3)
 
-        Dyt_Uy = torch.zeros_like(Uy)
-        Dyt_Uy[:-1, :] = Uy[:-1, :] - Uy[1:, :]
-        Dyt_Uy[-1, :] = Uy[-1, :] - Uy[0, :]
+#     for _ in range(num_iter):
+#         X_prev = X.clone()
 
-        # 构建RHS
-        RHS = Y + lamda * rho * (Dxt_Zx + Dyt_Zy) - lamda * (Dxt_Ux + Dyt_Uy)
+#         # 计算差分项
+#         # 水平方向差分 (循环边界)
+#         Dxt_Zx = torch.zeros_like(Zx)
+#         Dxt_Zx[:, :-1] = Zx[:, :-1] - Zx[:, 1:]
+#         Dxt_Zx[:, -1] = Zx[:, -1] - Zx[:, 0]
 
-        # 使用卷积进行邻域平均
-        neighbor_sum = F.conv2d(X[None, None, :, :], kernel, padding=0).squeeze()
-        X_center = (neighbor_sum * lamda * rho + RHS[1:-1, 1:-1]) / (1 + 4 * lamda * rho)
+#         # 垂直方向差分 (循环边界)
+#         Dyt_Zy = torch.zeros_like(Zy)
+#         Dyt_Zy[:-1, :] = Zy[:-1, :] - Zy[1:, :]
+#         Dyt_Zy[-1, :] = Zy[-1, :] - Zy[0, :]
 
-        # 更新X的中间区域
-        X[1:-1, 1:-1] = X_center
+#         # 乘子项的差分
+#         Dxt_Ux = torch.zeros_like(Ux)
+#         Dxt_Ux[:, :-1] = Ux[:, :-1] - Ux[:, 1:]
+#         Dxt_Ux[:, -1] = Ux[:, -1] - Ux[:, 0]
 
-        # 计算梯度项 (带循环边界)
-        Dx_X = torch.zeros_like(X)
-        Dx_X[:, 1:] = X[:, 1:] - X[:, :-1]
-        Dx_X[:, 0] = X[:, 0] - X[:, -1]
+#         Dyt_Uy = torch.zeros_like(Uy)
+#         Dyt_Uy[:-1, :] = Uy[:-1, :] - Uy[1:, :]
+#         Dyt_Uy[-1, :] = Uy[-1, :] - Uy[0, :]
 
-        Dy_X = torch.zeros_like(X)
-        Dy_X[1:, :] = X[1:, :] - X[:-1, :]
-        Dy_X[0, :] = X[0, :] - X[-1, :]
+#         # 构建RHS
+#         RHS = Y + lamda * rho * (Dxt_Zx + Dyt_Zy) - lamda * (Dxt_Ux + Dyt_Uy)
 
-        # 更新Z变量 (软阈值)
-        Tx = (Ux + rho * Dx_X) / rho
-        Zx = torch.sign(Tx) * torch.clamp(torch.abs(Tx) - 1 / rho, min=0)
+#         # 使用卷积进行邻域平均
+#         neighbor_sum = F.conv2d(X[None, None, :, :], kernel, padding=0).squeeze()
+#         X_center = (neighbor_sum * lamda * rho + RHS[1:-1, 1:-1]) / (1 + 4 * lamda * rho)
 
-        Ty = (Uy + rho * Dy_X) / rho
-        Zy = torch.sign(Ty) * torch.clamp(torch.abs(Ty) - 1 / rho, min=0)
+#         # 更新X的中间区域
+#         X[1:-1, 1:-1] = X_center
 
-        # 更新乘子
-        Ux += rho * (Dx_X - Zx)
-        Uy += rho * (Dy_X - Zy)
+#         # 计算梯度项 (带循环边界)
+#         Dx_X = torch.zeros_like(X)
+#         Dx_X[:, 1:] = X[:, 1:] - X[:, :-1]
+#         Dx_X[:, 0] = X[:, 0] - X[:, -1]
 
-        # 收敛判断
-        if torch.norm(X - X_prev) < tol:
-            break
+#         Dy_X = torch.zeros_like(X)
+#         Dy_X[1:, :] = X[1:, :] - X[:-1, :]
+#         Dy_X[0, :] = X[0, :] - X[-1, :]
 
-    # 返回去噪结果并恢复原始范围
-    return (X[1:-1, 1:-1] * data_max).unsqueeze(-1)
+#         # 更新Z变量 (软阈值)
+#         Tx = (Ux + rho * Dx_X) / rho
+#         Zx = torch.sign(Tx) * torch.clamp(torch.abs(Tx) - 1 / rho, min=0)
 
-def total_variation_3d(
-    data: torch.Tensor,
-    lamda: float = 0.02,
-    rho: float = 1.0,
-    num_iter: int = 500,
-    tol: float = 1e-5
-) -> torch.Tensor:
-    """
-    3D TV 去噪（ADMM，各向异性分方向 shrink；周期边界）
-    仅支持输入 [D, H, W]，输出保持 [D, H, W]
-    """
-    assert data.ndim == 3, "仅支持三维输入 [D, H, W]"
-    dev, dtype = data.device, data.dtype
-    D, H, W = data.shape
+#         Ty = (Uy + rho * Dy_X) / rho
+#         Zy = torch.sign(Ty) * torch.clamp(torch.abs(Ty) - 1 / rho, min=0)
 
-    # 归一化
-    data_max = torch.max(data)
-    norm = data / (data_max + 1e-6)
+#         # 更新乘子
+#         Ux += rho * (Dx_X - Zx)
+#         Uy += rho * (Dy_X - Zy)
 
-    # 变量初始化（与数据同形状）
-    X = norm.clone()
-    Y = X.clone()
-    Zx = torch.zeros_like(X)
-    Zy = torch.zeros_like(X)
-    Zz = torch.zeros_like(X)
-    Ux = torch.zeros_like(X)
-    Uy = torch.zeros_like(X)
-    Uz = torch.zeros_like(X)
+#         # 收敛判断
+#         if torch.norm(X - X_prev) < tol:
+#             break
 
-    def forward_diffs_periodic(X):
-        """前向差分（周期边界）"""
-        Dx = X - torch.roll(X, shifts=1, dims=2)  # x: W 方向（最后一维）
-        Dy = X - torch.roll(X, shifts=1, dims=1)  # y: H 方向
-        Dz = X - torch.roll(X, shifts=1, dims=0)  # z: D 方向
-        return Dx, Dy, Dz
+#     # 返回去噪结果并恢复原始范围
+#     return (X[1:-1, 1:-1] * data_max).unsqueeze(-1)
 
-    def divergence_periodic(Tx, Ty, Tz):
-        """
-        散度（Dᵗ），对应 2D 版里的 Dxt_*, Dyt_*：
-        DᵗT = (T - roll(T, -1)) 在各维度相加
-        等价写法，也常见的是 (roll(T, +1) - T)，只要与 forward 保持伴随关系即可
-        """
-        dxt = Tx - torch.roll(Tx, shifts=-1, dims=2)
-        dyt = Ty - torch.roll(Ty, shifts=-1, dims=1)
-        dzt = Tz - torch.roll(Tz, shifts=-1, dims=0)
-        return dxt + dyt + dzt
+# def total_variation_3d(
+#     data: torch.Tensor,
+#     lamda: float = 0.02,
+#     rho: float = 1.0,
+#     num_iter: int = 500,
+#     tol: float = 1e-5
+# ) -> torch.Tensor:
+#     """
+#     3D TV 去噪（ADMM，各向异性分方向 shrink；周期边界）
+#     仅支持输入 [D, H, W]，输出保持 [D, H, W]
+#     """
+#     assert data.ndim == 3, "仅支持三维输入 [D, H, W]"
+#     dev, dtype = data.device, data.dtype
+#     D, H, W = data.shape
 
-    def six_neighbor_sum_periodic(X):
-        """6 邻域周期求和：roll ±1 沿三个维度"""
-        xm = torch.roll(X, shifts=-1, dims=2)
-        xp = torch.roll(X, shifts=+1, dims=2)
-        ym = torch.roll(X, shifts=-1, dims=1)
-        yp = torch.roll(X, shifts=+1, dims=1)
-        zm = torch.roll(X, shifts=-1, dims=0)
-        zp = torch.roll(X, shifts=+1, dims=0)
-        return xm + xp + ym + yp + zm + zp
+#     # 归一化
+#     data_max = torch.max(data)
+#     norm = data / (data_max + 1e-6)
 
-    for _ in range(num_iter):
-        X_prev = X
+#     # 变量初始化（与数据同形状）
+#     X = norm.clone()
+#     Y = X.clone()
+#     Zx = torch.zeros_like(X)
+#     Zy = torch.zeros_like(X)
+#     Zz = torch.zeros_like(X)
+#     Ux = torch.zeros_like(X)
+#     Uy = torch.zeros_like(X)
+#     Uz = torch.zeros_like(X)
 
-        # RHS = Y + λρ Dᵗ Z - λ Dᵗ U
-        divZ = divergence_periodic(Zx, Zy, Zz)
-        divU = divergence_periodic(Ux, Uy, Uz)
-        RHS = Y + lamda * rho * divZ - lamda * divU
+#     def forward_diffs_periodic(X):
+#         """前向差分（周期边界）"""
+#         Dx = X - torch.roll(X, shifts=1, dims=2)  # x: W 方向（最后一维）
+#         Dy = X - torch.roll(X, shifts=1, dims=1)  # y: H 方向
+#         Dz = X - torch.roll(X, shifts=1, dims=0)  # z: D 方向
+#         return Dx, Dy, Dz
 
-        # X 更新： (1 + 6λρ) X = λρ * neighbor_sum(X) + RHS
-        neighbor_sum = six_neighbor_sum_periodic(X)
-        X = (lamda * rho * neighbor_sum + RHS) / (1.0 + 6.0 * lamda * rho)
+#     def divergence_periodic(Tx, Ty, Tz):
+#         """
+#         散度（Dᵗ），对应 2D 版里的 Dxt_*, Dyt_*：
+#         DᵗT = (T - roll(T, -1)) 在各维度相加
+#         等价写法，也常见的是 (roll(T, +1) - T)，只要与 forward 保持伴随关系即可
+#         """
+#         dxt = Tx - torch.roll(Tx, shifts=-1, dims=2)
+#         dyt = Ty - torch.roll(Ty, shifts=-1, dims=1)
+#         dzt = Tz - torch.roll(Tz, shifts=-1, dims=0)
+#         return dxt + dyt + dzt
 
-        # 前向差分（用于 Z/U）
-        Dx, Dy, Dz = forward_diffs_periodic(X)
+#     def six_neighbor_sum_periodic(X):
+#         """6 邻域周期求和：roll ±1 沿三个维度"""
+#         xm = torch.roll(X, shifts=-1, dims=2)
+#         xp = torch.roll(X, shifts=+1, dims=2)
+#         ym = torch.roll(X, shifts=-1, dims=1)
+#         yp = torch.roll(X, shifts=+1, dims=1)
+#         zm = torch.roll(X, shifts=-1, dims=0)
+#         zp = torch.roll(X, shifts=+1, dims=0)
+#         return xm + xp + ym + yp + zm + zp
 
-        # Z：软阈值（分方向各向异性，与你的 2D 写法一致）
-        Tx = (Ux + rho * Dx) / rho
-        Ty = (Uy + rho * Dy) / rho
-        Tz = (Uz + rho * Dz) / rho
-        Zx = torch.sign(Tx) * torch.clamp(torch.abs(Tx) - 1.0 / rho, min=0.0)
-        Zy = torch.sign(Ty) * torch.clamp(torch.abs(Ty) - 1.0 / rho, min=0.0)
-        Zz = torch.sign(Tz) * torch.clamp(torch.abs(Tz) - 1.0 / rho, min=0.0)
+#     for _ in range(num_iter):
+#         X_prev = X
 
-        # U：U += ρ (D X - Z)
-        Ux = Ux + rho * (Dx - Zx)
-        Uy = Uy + rho * (Dy - Zy)
-        Uz = Uz + rho * (Dz - Zz)
+#         # RHS = Y + λρ Dᵗ Z - λ Dᵗ U
+#         divZ = divergence_periodic(Zx, Zy, Zz)
+#         divU = divergence_periodic(Ux, Uy, Uz)
+#         RHS = Y + lamda * rho * divZ - lamda * divU
 
-        # 收敛判断
-        if torch.norm(X - X_prev) < tol:
-            break
+#         # X 更新： (1 + 6λρ) X = λρ * neighbor_sum(X) + RHS
+#         neighbor_sum = six_neighbor_sum_periodic(X)
+#         X = (lamda * rho * neighbor_sum + RHS) / (1.0 + 6.0 * lamda * rho)
 
-    # 还原幅值并返回 3D
-    return X * data_max
+#         # 前向差分（用于 Z/U）
+#         Dx, Dy, Dz = forward_diffs_periodic(X)
+
+#         # Z：软阈值（分方向各向异性，与你的 2D 写法一致）
+#         Tx = (Ux + rho * Dx) / rho
+#         Ty = (Uy + rho * Dy) / rho
+#         Tz = (Uz + rho * Dz) / rho
+#         Zx = torch.sign(Tx) * torch.clamp(torch.abs(Tx) - 1.0 / rho, min=0.0)
+#         Zy = torch.sign(Ty) * torch.clamp(torch.abs(Ty) - 1.0 / rho, min=0.0)
+#         Zz = torch.sign(Tz) * torch.clamp(torch.abs(Tz) - 1.0 / rho, min=0.0)
+
+#         # U：U += ρ (D X - Z)
+#         Ux = Ux + rho * (Dx - Zx)
+#         Uy = Uy + rho * (Dy - Zy)
+#         Uz = Uz + rho * (Dz - Zz)
+
+#         # 收敛判断
+#         if torch.norm(X - X_prev) < tol:
+#             break
+
+#     # 还原幅值并返回 3D
+#     return X * data_max
 
 
 
@@ -384,7 +426,7 @@ def create_or_separate(tensor:tuple, nx,ny,nz,nstep,device: torch.device,
 
 
 
-def check_tensors_for_nan_inf(**tensors):
+def check_tensors_for_nan_inf(d,**tensors):
     """
         check_tensors_for_nan_inf(
             gEx=gEx, gEy=gEy, gEz=gEz,
@@ -396,11 +438,11 @@ def check_tensors_for_nan_inf(**tensors):
 
     for name, tensor in tensors.items():
         if tensor is None:
-            print(f"[WARNING] {name} is None.")
+            print(f"[WARNING]{d}: {name} is None.")
             continue
 
         if not isinstance(tensor, torch.Tensor):
-            print(f"[WARNING] {name} is not a tensor: {type(tensor)}")
+            print(f"[WARNING]{d}: {name} is not a tensor: {type(tensor)}")
             continue
 
         has_nan = torch.isnan(tensor).any().item()
@@ -408,7 +450,7 @@ def check_tensors_for_nan_inf(**tensors):
 
         if has_nan or has_inf:
             found_issue = True
-            print(f"❌ [ERROR] Tensor `{name}` contains:", end=" ")
+            print(f"❌ [ERROR]{d}: Tensor `{name}` contains:", end=" ")
             if has_nan:
                 print("NaN ", end="")
             if has_inf:

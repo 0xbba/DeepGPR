@@ -37,17 +37,22 @@ def ricker(
         return y.to(dtype)
     return y
 
-def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_location,dx,dt,pmlthick):
+def initialization(device, er,se,mr,source_amplitudes,source_location,receiver_location,dx,dt,pmlthick):
     dtype=torch.float32
     if er.min()<1 :
         raise ValueError('The values of epsilon is incorrect.(should be greater than 1)')
     if se.min()<0:
         raise ValueError('The values of sigma is incorrect.(should be non-negative)')
     
-    if len(er.shape) != 3 and len(er.shape) == 2:
-        er.unsqueeze_(-1)
-    if len(se.shape) != 3 and len(se.shape) == 2:
-        se.unsqueeze_(-1)
+    if len(er.shape) == 2:
+        er = er.reshape(*er.shape, 1)
+    elif len(er.shape) != 3:
+        raise ValueError('The shape of epsilon should be 2-d or 3-d.')
+    
+    if len(se.shape) == 2:
+        se = se.reshape(*se.shape, 1)
+    elif len(se.shape) != 3:
+        raise ValueError('The shape of epsilon should be 2-d or 3-d.')
 
     if er.shape == se.shape:
         nx=er.shape[0]
@@ -105,17 +110,17 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
     else:
         raise ValueError('The first dimension (nstep) of source_location and receiver_location should be the same.')
     
-    source_apmlitudes=source_apmlitudes.to(device).contiguous()
+    source_amplitudes=source_amplitudes.to(device).contiguous()
 
-    if (source_apmlitudes.shape[0]>1 and source_apmlitudes.shape[0]<nsr) or source_apmlitudes.shape[0]>nsr :
+    if (source_amplitudes.shape[0]>1 and source_amplitudes.shape[0]<nsr) or source_amplitudes.shape[0]>nsr :
         raise ValueError('The number of source waveforms is incorrect.')
-    elif source_apmlitudes.shape[0]==1 and nsr!=1:
-        source_apmlitudes=source_apmlitudes.repeat(nsr,1,1).contiguous()
+    elif source_amplitudes.shape[0]==1 and nsr!=1:
+        source_amplitudes=source_amplitudes.repeat(nsr,1,1).contiguous()
         print('Tips: The number of source waveforms is 1, but the number of sources is ',nsr,'. The source waveform is repeated for all sources.')
 
     check_cfl(dx, dt,nx,ny,nz)
 
-    nt=source_apmlitudes.shape[1]
+    nt=source_amplitudes.shape[1]
     
 
     pmlthick=pmlthick_revert(pmlthick,er)
@@ -123,7 +128,7 @@ def initialization(device, er,se,mr,source_apmlitudes,source_location,receiver_l
     see=F.pad(se, (0, 1, 0, 1, 0, 1)).to(dtype)
     mr=F.pad(mr, (0, 1, 0, 1, 0, 1)).to(dtype)
 
-    return nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_apmlitudes
+    return er,se,nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_amplitudes
 
 
 def check_cfl(dx, dt, nx,ny,nz):
@@ -496,7 +501,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         x0=torch.tensor((pmlthick[0],0,pmlthick[0],0,ny,0,nz), device=device, dtype=torch.int)
         averageer[0]=er[x0[1],:ny,:nz].mean()
         averagemr[0]=mr[x0[1],:ny,:nz].mean()
-        CFS0=CFS()
+        CFS0=CFS(device=device)
         x01=torch.zeros((4,lencfs,pmlthick[0]), device=device, dtype=dtype)
         x02=torch.zeros((4,lencfs,pmlthick[0]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS0,x01,x02, averageer[0], averagemr[0], dt,dx,pmlthick[0])
@@ -505,7 +510,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         xm=torch.tensor((pmlthick[1],nx-pmlthick[1],nx,0,ny,0,nz), device=device, dtype=torch.int)
         averageer[1]=er[xm[1],:ny,:nz].mean()
         averagemr[1]=mr[xm[1],:ny,:nz].mean()
-        CFS1=CFS()
+        CFS1=CFS(device=device)
         xm1=torch.zeros((4,lencfs,pmlthick[1]), device=device, dtype=dtype)
         xm2=torch.zeros((4,lencfs,pmlthick[1]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS1,xm1,xm2, averageer[1], averagemr[1], dt,dx,pmlthick[1])
@@ -514,7 +519,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         y0=torch.tensor((pmlthick[2],0,nx,0,pmlthick[2],0,nz), device=device, dtype=torch.int)
         averageer[2]=er[:nx,y0[3],:nz].mean()
         averagemr[2]=mr[:nx,y0[3],:nz].mean()
-        CFS2=CFS()
+        CFS2=CFS(device=device)
         y01=torch.zeros((4,lencfs,pmlthick[2]), device=device, dtype=dtype)
         y02=torch.zeros((4,lencfs,pmlthick[2]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS2,y01,y02, averageer[2], averagemr[2], dt,dx,pmlthick[2])
@@ -523,7 +528,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         ym=torch.tensor((pmlthick[3],0,nx,ny-pmlthick[3],ny,0,nz), device=device, dtype=torch.int)
         averageer[3]=er[:nx,ym[3],:nz].mean()
         averagemr[3]=mr[:nx,ym[3],:nz].mean()
-        CFS3=CFS()
+        CFS3=CFS(device=device)
         ym1=torch.zeros((4,lencfs,pmlthick[3]), device=device, dtype=dtype)
         ym2=torch.zeros((4,lencfs,pmlthick[3]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS3,ym1,ym2, averageer[3], averagemr[3], dt,dx,pmlthick[3])
@@ -532,7 +537,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         z0=torch.tensor((pmlthick[4],0,nx,0,ny,0,pmlthick[4]), device=device, dtype=torch.int)
         averageer[4]=er[:nx,:ny,z0[5]].mean()
         averagemr[4]=mr[:nx,:ny,z0[5]].mean()
-        CFS4=CFS()
+        CFS4=CFS(device=device)
         z01=torch.zeros((4,lencfs,pmlthick[4]), device=device, dtype=dtype)
         z02=torch.zeros((4,lencfs,pmlthick[4]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS4,z01,z02, averageer[4], averagemr[4], dt,dx,pmlthick[4])
@@ -541,7 +546,7 @@ def buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype):
         zm=torch.tensor((pmlthick[5],0,nx,0,ny,nz-pmlthick[5],nz), device=device, dtype=torch.int)
         averageer[5]=er[:nx,:ny,zm[5]].mean()
         averagemr[5]=mr[:nx,:ny,zm[5]].mean()
-        CFS5=CFS()
+        CFS5=CFS(device=device)
         zm1=torch.zeros((4,lencfs,pmlthick[5]), device=device, dtype=dtype)
         zm2=torch.zeros((4,lencfs,pmlthick[5]), device=device, dtype=dtype)
         calculate_pml_update_coeffs(CFS5,zm1,zm2, averageer[5], averagemr[5], dt,dx,pmlthick[5])
@@ -563,11 +568,11 @@ class CFSParameter(object):
 
 class CFS(object):
 
-    def __init__(self):
+    def __init__(self, device):
         self.alpha = CFSParameter(ID='alpha', scalingprofile='constant')
         self.kappa = CFSParameter(ID='kappa', scalingprofile='constant', min=1, max=1)
         self.sigma = CFSParameter(ID='sigma', scalingprofile='quartic', min=0, max=None)
-        self.device = torch.device("cuda")
+        self.device = device
 
     def calculate_sigmamax(self, d, er, mr):
         with torch.no_grad():
@@ -717,7 +722,7 @@ def build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device):
 
 
 def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None, 
-            source_apmlitudes=None,
+            source_amplitudes=None,
             source_location=None, 
             receiver_location=None, 
             er=None, se=None,mr=None, 
@@ -726,7 +731,7 @@ def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None,
     H=None
     PML=None
 
-    nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_apmlitudes=initialization(device,er,se,mr,source_apmlitudes,source_location,receiver_location,dx,dt,pmlthick)
+    er,se,nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_amplitudes=initialization(device,er,se,mr,source_amplitudes,source_location,receiver_location,dx,dt,pmlthick)
 
     Ex,Ey,Ez=create_or_separate(E,nx,ny,nz,nstep,device,dtype)
     Hx,Hy,Hz=create_or_separate(H,nx,ny,nz,nstep,device,dtype)
@@ -738,8 +743,8 @@ def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None,
 
     del x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2
 
-    print(per_nstep)
-    print(nstep)
+    print("per_nstep:"+str(per_nstep))
+    print("total step:"+str(nstep))
     if per_nstep==None:
         return (Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2)
     else:

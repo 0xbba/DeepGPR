@@ -171,44 +171,119 @@ def pmlthick_revert(p, er):
 
 
 
+# class TVRegularization(nn.Module):
+#     def __init__(self, weight_ep=0.1, weight_sigma=10, method='anisotropic'):
+
+#         super(TVRegularization, self).__init__()
+#         self.weight_ep = weight_ep
+#         self.weight_sigma = weight_sigma
+#         self.method = method
+
+#     def _compute_tv(self, data):
+            
+#         d_x = data[..., 1:, :, :] - data[..., :-1, :, :]
+#         d_y = data[..., :, 1:, :] - data[..., :, :-1, :]
+#         is_3d = data.shape[-1] > 1
+#         if is_3d:
+#             d_z = data[..., :, :, 1:] - data[..., :, :, :-1]
+        
+#         if self.method == 'anisotropic':
+#             loss = torch.sum(torch.abs(d_x)) + torch.sum(torch.abs(d_y))
+#             if is_3d:
+#                 loss += torch.sum(torch.abs(d_z))
+                
+#         else:
+#             loss = torch.sum(torch.pow(d_x, 2)) + torch.sum(torch.pow(d_y, 2))
+#             if is_3d:
+#                 loss += torch.sum(torch.pow(d_z, 2))
+#             loss = torch.sqrt(loss + 1e-8) 
+#         return loss / data.numel()
+
+#     def forward(self, ep=None, sigma=None):
+#         loss = 0.0
+#         if ep is not None and self.weight_ep > 0:
+#             loss += self.weight_ep * self._compute_tv(ep)
+            
+#         if sigma is not None and self.weight_sigma > 0:
+#             loss += self.weight_sigma * self._compute_tv(sigma)
+            
+#         return loss
 class TVRegularization(nn.Module):
     def __init__(self, weight_ep=0.1, weight_sigma=10, method='anisotropic'):
-
         super(TVRegularization, self).__init__()
         self.weight_ep = weight_ep
         self.weight_sigma = weight_sigma
         self.method = method
 
     def _compute_tv(self, data):
+        """
+        自动适应 2D [H, W] 或 3D [D, H, W] / [H, W, C] 的 TV 计算
+        """
+        # 1. 维度清洗：如果是 [H, W, 1]，先去掉那个 1
+        if data.dim() == 3 and data.shape[-1] == 1:
+            data = data.squeeze(-1)
             
-        d_x = data[..., 1:, :, :] - data[..., :-1, :, :]
-        d_y = data[..., :, 1:, :] - data[..., :, :-1, :]
-        is_3d = data.shape[-1] > 1
-        if is_3d:
-            d_z = data[..., :, :, 1:] - data[..., :, :, :-1]
-        
-        if self.method == 'anisotropic':
-            loss = torch.sum(torch.abs(d_x)) + torch.sum(torch.abs(d_y))
-            if is_3d:
-                loss += torch.sum(torch.abs(d_z))
-                
+        # 2. 根据维度分情况计算梯度
+        if data.dim() == 2:
+            # --- 2D 情况 [H, W] ---
+            # X方向差分 (行与行之间)
+            d_x = data[1:, :] - data[:-1, :]
+            # Y方向差分 (列与列之间)
+            d_y = data[:, 1:] - data[:, :-1]
+            
+            # 2D 肯定没有 Z 方向
+            loss_x = torch.sum(torch.abs(d_x))
+            loss_y = torch.sum(torch.abs(d_y))
+            loss_z = 0.0
+            
+        elif data.dim() == 3:
+            # --- 3D 情况 [D, H, W] ---
+            # 假设第0维是深度/X，第1维是高度/Y，第2维是宽度/Z
+            d_x = data[1:, :, :] - data[:-1, :, :]
+            d_y = data[:, 1:, :] - data[:, :-1, :]
+            d_z = data[:, :, 1:] - data[:, :, :-1]
+            
+            loss_x = torch.sum(torch.abs(d_x))
+            loss_y = torch.sum(torch.abs(d_y))
+            loss_z = torch.sum(torch.abs(d_z))
+            
+        elif data.dim() == 4:
+             # --- 4D 情况 [Batch, Channel, H, W] ---
+             # 常见于图像处理习惯
+             d_x = data[..., 1:, :] - data[..., :-1, :]
+             d_y = data[..., :, 1:] - data[..., :, :-1]
+             
+             loss_x = torch.sum(torch.abs(d_x))
+             loss_y = torch.sum(torch.abs(d_y))
+             loss_z = 0.0
+             
         else:
-            loss = torch.sum(torch.pow(d_x, 2)) + torch.sum(torch.pow(d_y, 2))
-            if is_3d:
-                loss += torch.sum(torch.pow(d_z, 2))
-            loss = torch.sqrt(loss + 1e-8) 
-        return loss / data.numel()
+            # 避免标量或1D数据报错
+            return torch.tensor(0.0, device=data.device)
+
+        # 3. 汇总 Loss
+        if self.method == 'anisotropic':
+            # 各向异性：直接相加 (|dx| + |dy|)
+            total_tv = loss_x + loss_y + loss_z
+        else:
+            # 各向同性：平方和开根 (sqrt(dx^2 + dy^2)) - 简化版近似
+            # 注意：严谨的各向同性需要对每个像素点求平方和再sum，这里简化处理以保持计算图简单
+            total_tv = (loss_x**2 + loss_y**2 + loss_z**2 + 1e-8).sqrt()
+
+        return total_tv / data.numel()
 
     def forward(self, ep=None, sigma=None):
-        loss = 0.0
+        loss = torch.tensor(0.0, device=ep.device if ep is not None else sigma.device)
+        
+        # 计算 ep (介电常数) 的 TV
         if ep is not None and self.weight_ep > 0:
             loss += self.weight_ep * self._compute_tv(ep)
             
+        # 计算 sigma (电导率) 的 TV
         if sigma is not None and self.weight_sigma > 0:
             loss += self.weight_sigma * self._compute_tv(sigma)
             
         return loss
-
 
 
 

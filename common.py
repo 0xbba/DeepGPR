@@ -248,9 +248,9 @@ class TVRegularization(nn.Module):
         return loss
 
 
-def create_or_separate(tensor:tuple, nx,ny,nz,nstep,device: torch.device,
+def create_or_separate(tuple:tuple, nx,ny,nz,nstep,device: torch.device,
                   dtype: torch.dtype):
-    if tensor == None:
+    if tuple == None:
         return torch.zeros((nstep,nx+1,ny+1,nz+1), device=device, dtype=dtype).contiguous(),torch.zeros((nstep,nx+1,ny+1,nz+1), device=device, dtype=dtype).contiguous(),torch.zeros((nstep,nx+1,ny+1,nz+1), device=device, dtype=dtype).contiguous()
     # else:
     #     if tensor[0].shape[1]==nx+1 and tensor[0].shape[2]==ny+1 and tensor[0].shape[3]==nz+1 and tensor[0].shape[0]==nstep:
@@ -259,21 +259,29 @@ def create_or_separate(tensor:tuple, nx,ny,nz,nstep,device: torch.device,
     #       print(nstep,nx,ny,nz)
     #       raise ValueError('The shape of E and H should be (nstep,nx+1,ny+1,nz+1).')
     else:
-        if (
-            tensor[0].shape[1] == nx + 1
-            and tensor[0].shape[2] == ny + 1
-            and tensor[0].shape[3] == nz + 1
-            and tensor[0].shape[0] == nstep
-        ):
+        condition = (
+        tuple[0].shape[0] == nstep and
+        tuple[0].shape[1] == nx + 1 and
+        tuple[0].shape[2] == ny + 1
+        )
+    
+        if tuple[0].ndim > 3:
+            condition = condition and (tuple[0].shape[3] == nz + 1)
+        
+        if condition:
             return (
-                tensor[0].contiguous(),
-                tensor[1].contiguous(),
-                tensor[2].contiguous()
+                tuple[0].contiguous(),
+                tuple[1].contiguous(),
+                tuple[2].contiguous()
             )
         else:
-            expected = (nstep, nx + 1, ny + 1, nz + 1)
-            actual = (tuple(tensor[0].shape), tuple(tensor[1].shape), tuple(tensor[2].shape))
-            raise ValueError(f"Expected {expected}, but got {actual}.")
+            actual_shape = list(tuple[0].shape)
+            expected_min_shape = [nstep, nx + 1, ny + 1, nz + 1]
+            raise ValueError(
+                f"Shape not match! \n"
+                f"Actual shape: {actual_shape} \n"
+                f"Expected shape (at least): {expected_min_shape[:3]} and (if nz!=1) {nz+1}"
+            )
 
 
 
@@ -573,8 +581,12 @@ def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None,
 
     print("per_nstep:"+str(per_nstep))
     print("total step:"+str(nstep))
+    # print_field_shapes((Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2))
+
     if per_nstep==None:
         return (Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2)
+    elif er.shape[2]==1:
+        return (Ex[:per_nstep,:,:,0],Ey[:per_nstep,:,:,0],Ez[:per_nstep,:,:,0]),(Hx[:per_nstep,:,:,0],Hy[:per_nstep,:,:,0],Hz[:per_nstep,:,:,0]),(x0EPhi1[:per_nstep,:,:,:],x0EPhi2[:per_nstep,:,:,:],x0HPhi1[:per_nstep,:,:,:],x0HPhi2[:per_nstep,:,:,:],xmEPhi1[:per_nstep,:,:,:],xmEPhi2[:per_nstep,:,:,:],xmHPhi1[:per_nstep,:,:,:],xmHPhi2[:per_nstep,:,:,:],y0EPhi1[:per_nstep,:,:,:],y0EPhi2[:per_nstep,:,:,:],y0HPhi1[:per_nstep,:,:,:],y0HPhi2[:per_nstep,:,:,:],ymEPhi1[:per_nstep,:,:,:],ymEPhi2[:per_nstep,:,:,:],ymHPhi1[:per_nstep,:,:,:],ymHPhi2[:per_nstep,:,:,:],z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2)
     else:
         return (Ex[:per_nstep,:,:,:],Ey[:per_nstep,:,:,:],Ez[:per_nstep,:,:,:]),(Hx[:per_nstep,:,:,:],Hy[:per_nstep,:,:,:],Hz[:per_nstep,:,:,:]),(x0EPhi1[:per_nstep,:,:,:],x0EPhi2[:per_nstep,:,:,:],x0HPhi1[:per_nstep,:,:,:],x0HPhi2[:per_nstep,:,:,:],xmEPhi1[:per_nstep,:,:,:],xmEPhi2[:per_nstep,:,:,:],xmHPhi1[:per_nstep,:,:,:],xmHPhi2[:per_nstep,:,:,:],y0EPhi1[:per_nstep,:,:,:],y0EPhi2[:per_nstep,:,:,:],y0HPhi1[:per_nstep,:,:,:],y0HPhi2[:per_nstep,:,:,:],ymEPhi1[:per_nstep,:,:,:],ymEPhi2[:per_nstep,:,:,:],ymHPhi1[:per_nstep,:,:,:],ymHPhi2[:per_nstep,:,:,:],z0EPhi1[:per_nstep,:,:,:],z0EPhi2[:per_nstep,:,:,:],z0HPhi1[:per_nstep,:,:,:],z0HPhi2[:per_nstep,:,:,:],zmEPhi1[:per_nstep,:,:,:],zmEPhi2[:per_nstep,:,:,:],zmHPhi1[:per_nstep,:,:,:],zmHPhi2[:per_nstep,:,:,:])
 
@@ -584,4 +596,54 @@ def zero_field(*tensors):
     for t in tensors:
         if t is not None:
             zeroed_copies.append(torch.zeros_like(t))
+        else:
+            zeroed_copies.append(None)
     return zeroed_copies
+
+
+def print_field_shapes(E, H, PML):
+    """
+    打印 FDTD 场变量的形状
+    E: (Ex, Ey, Ez)
+    H: (Hx, Hy, Hz)
+    PML: 包含 24 个 Phi 张量的元组
+    """
+    print("="*30)
+    print(" FIELD SHAPES CHECK ")
+    print("="*30)
+    
+    # 1. 检查电场 E
+    e_names = ['Ex', 'Ey', 'Ez']
+    for name, tensor in zip(e_names, E):
+        shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
+        print(f"{name:10} : {shape}")
+    
+    print("-" * 20)
+    
+    # 2. 检查磁场 H
+    h_names = ['Hx', 'Hy', 'Hz']
+    for name, tensor in zip(h_names, H):
+        shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
+        print(f"{name:10} : {shape}")
+    
+    print("-" * 20)
+    
+    # 3. 检查 PML 场
+    pml_names = [
+        "x0EPhi1", "x0EPhi2", "x0HPhi1", "x0HPhi2",
+        "xmEPhi1", "xmEPhi2", "xmHPhi1", "xmHPhi2",
+        "y0EPhi1", "y0EPhi2", "y0HPhi1", "y0HPhi2",
+        "ymEPhi1", "ymEPhi2", "ymHPhi1", "ymHPhi2",
+        "z0EPhi1", "z0EPhi2", "z0HPhi1", "z0HPhi2",
+        "zmEPhi1", "zmEPhi2", "zmHPhi1", "zmHPhi2"
+    ]
+    
+    for i, name in enumerate(pml_names):
+        if i < len(PML):
+            tensor = PML[i]
+            shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
+            print(f"{name:10} : {shape}")
+        else:
+            print(f"{name:10} : Missing in PML tuple")
+            
+    print("="*30)

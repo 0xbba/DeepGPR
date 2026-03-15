@@ -51,6 +51,7 @@ class DeepGPR(torch.autograd.Function):
                 y0,ym,z0,zm,x01,x02,xm1,xm2,
                 y01,y02,ym1,ym2,z01,z02,zm1,zm2,
                 ere,see,source_direction, reciever_direction):
+        source_amplitudes = source_amplitudes.contiguous()
         source_location=source_location.to(torch.int32).contiguous()
         receiver_location=receiver_location.to(torch.int32).contiguous()
         ctx.save_for_backward(er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see)
@@ -77,7 +78,7 @@ class DeepGPR(torch.autograd.Function):
         Hupdatecoffs4=torch.zeros((nx+1,ny+1,nz+1), device=device, dtype=dtype)
 
         receiver_amplitudes = torch.zeros((nstep, 6, nt, nrx),device=device).contiguous()  
-        
+
         lib.forward(
                 ctypes.cast(ere.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(see.data_ptr(), ctypes.POINTER(ctypes.c_float)), 

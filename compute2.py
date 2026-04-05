@@ -2,7 +2,6 @@ import torch
 import ctypes
 from . import lib
 from .common import initialization,build_pml_phi,create_or_separate,buildpmlcoeffs,check_tensors_for_nan_inf
-# torch.LAUNCH_BLOCKING=1
 
 def compute(device, dx=None, dt=None, 
             source_amplitudes=None,
@@ -11,20 +10,10 @@ def compute(device, dx=None, dt=None,
             er=None, se=None,mr=None, 
             E=None,H=None,
             PML=None,
-            pmlthick=10, source_direction=2, reciever_direction=2):
-    #dx float(m)
-    #dt float(s)
-    #source_amplitudes: [nsrc,nt,1](if nsrc=1,all source use the amplitude)
-    #Eall: [nt,nstep,nx,ny,nz]
-    #receiver_amplitudes: [nstep, nt, nrx] (Only Ez)
-    #source_location:[nstep,nsrc,3]
-    #receiver_location:[nstep,nrx,3]
-    #E: [3,nstep,nx+1,ny+1,nz+1]
-    #H: [3,nstep,nx+1,ny+1,nz+1]
-    #PML: [24,nstep,---,---,---]
-    # er = torch.clamp(er, min=1) 
-    # se = torch.clamp(se, min=0) 
-
+            pmlthick=10, source_direction=2, reciever_direction=2,
+            model_gradient_sampling_interval=1,
+            use_async_offload=False):
+            
     er,se,nx,ny,nz,nt,nstep,nsr,nrx,ere,see,mr,mode,dtype,pmlthick,source_amplitudes=initialization(device,er,se,mr,source_amplitudes,source_location,receiver_location,dx,dt,pmlthick)
 
     Ex,Ey,Ez=create_or_separate(E,nx,ny,nz,nstep,device,dtype)
@@ -32,15 +21,12 @@ def compute(device, dx=None, dt=None,
 
     x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2=buildpmlcoeffs(er,mr,dt,dx,nx,ny,nz,pmlthick,device,dtype)
 
-
-
     x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2=build_pml_phi(x0,xm,y0,ym,z0,zm,nstep,PML,device)
 
-    Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2,Eall,receiver_amplitudes = DeepGPR.apply(er, se,Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2, mr,dx,nx,ny,nz,dt,nt,nstep,source_amplitudes,source_location,receiver_location,pmlthick,nsr,nrx,device,dtype,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see,source_direction, reciever_direction)
+    Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2,Eall,receiver_amplitudes = DeepGPR.apply(
+        er, se,Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2, mr,dx,nx,ny,nz,dt,nt,nstep,source_amplitudes,source_location,receiver_location,pmlthick,nsr,nrx,device,dtype,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see,source_direction, reciever_direction, model_gradient_sampling_interval, use_async_offload)
 
     return Eall,(Ex,Ey,Ez),(Hx,Hy,Hz),(x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2),receiver_amplitudes
-
-
 
 
 class DeepGPR(torch.autograd.Function):
@@ -50,7 +36,9 @@ class DeepGPR(torch.autograd.Function):
                 pmlthick,nsr,nrx,device,dtype,x0,xm,
                 y0,ym,z0,zm,x01,x02,xm1,xm2,
                 y01,y02,ym1,ym2,z01,z02,zm1,zm2,
-                ere,see,source_direction, reciever_direction):
+                ere,see,source_direction, reciever_direction, 
+                model_gradient_sampling_interval, use_async_offload):
+        
         source_amplitudes = source_amplitudes.contiguous()
         source_location=source_location.to(torch.int32).contiguous()
         receiver_location=receiver_location.to(torch.int32).contiguous()
@@ -67,8 +55,16 @@ class DeepGPR(torch.autograd.Function):
         ctx.pmlthick=pmlthick
         ctx.device=device
         ctx.dtype=dtype
+        ctx.model_gradient_sampling_interval = model_gradient_sampling_interval
+        ctx.use_async_offload = use_async_offload
 
-        Eall=torch.zeros((nt,nstep,nx,ny,nz), device=device, dtype=dtype).contiguous()
+        nt_saved = (nt + model_gradient_sampling_interval - 1) // model_gradient_sampling_interval
+        
+        # 仅仅控制显存分配策略，无需修改 C 端参数签名
+        if use_async_offload:
+            Eall = torch.zeros((nt_saved, nstep, nx, ny, nz), device='cpu', dtype=dtype).pin_memory()
+        else:
+            Eall = torch.zeros((nt_saved, nstep, nx, ny, nz), device=device, dtype=dtype).contiguous()
 
         Eupdatecoffs0=torch.zeros((nx+1,ny+1,nz+1), device=device, dtype=dtype)
         Eupdatecoffs1=torch.zeros((nx+1,ny+1,nz+1), device=device, dtype=dtype)
@@ -83,7 +79,7 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(ere.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(see.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(mr.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                ctypes.cast(Eall.data_ptr(), ctypes.POINTER(ctypes.c_float)),
+                ctypes.cast(Eall.data_ptr(), ctypes.POINTER(ctypes.c_float)),              
                 ctypes.cast(Ex.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(Ey.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(Ez.data_ptr(), ctypes.POINTER(ctypes.c_float)),
@@ -122,10 +118,11 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(receiver_location.data_ptr(), ctypes.POINTER(ctypes.c_int)), ctypes.cast(receiver_amplitudes.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 nx+1, ny+1, nz+1, nsr,
                 ctypes.cast(source_location.data_ptr(), ctypes.POINTER(ctypes.c_int)), ctypes.cast(source_amplitudes.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                source_direction)
+                source_direction,
+                model_gradient_sampling_interval)
 
         check_tensors_for_nan_inf(d="forward",
-            Eall=Eall,Ex=Ex, Ey=Ey, Ez=Ez,
+            Ex=Ex, Ey=Ey, Ez=Ez,
             Hx=Hx, Hy=Hy, Hz=Hz,
             x0EPhi1=x0EPhi1, x0EPhi2=x0EPhi2,
             x0HPhi1=x0HPhi1, x0HPhi2=x0HPhi2,
@@ -143,9 +140,6 @@ class DeepGPR(torch.autograd.Function):
 
         ctx.Eall = Eall
         return (Ex,Ey,Ez,Hx,Hy,Hz,x0EPhi1,x0EPhi2,x0HPhi1,x0HPhi2,xmEPhi1,xmEPhi2,xmHPhi1,xmHPhi2,y0EPhi1,y0EPhi2,y0HPhi1,y0HPhi2,ymEPhi1,ymEPhi2,ymHPhi1,ymHPhi2,z0EPhi1,z0EPhi2,z0HPhi1,z0HPhi2,zmEPhi1,zmEPhi2,zmHPhi1,zmHPhi2,Eall,receiver_amplitudes[:,reciever_direction,:,:])
-
-
-
 
     @staticmethod
     def backward(ctx,gEx,gEy,gEz,gHx,gHy,gHz,gx0EPhi1,gx0EPhi2,gx0HPhi1,gx0HPhi2,gxmEPhi1,gxmEPhi2,gxmHPhi1,gxmHPhi2,gy0EPhi1,gy0EPhi2,gy0HPhi1,gy0HPhi2,gymEPhi1,gymEPhi2,gymHPhi1,gymHPhi2,gz0EPhi1,gz0EPhi2,gz0HPhi1,gz0HPhi2,gzmEPhi1,gzmEPhi2,gzmHPhi1,gzmHPhi2,gEall,gezreciver):
@@ -191,6 +185,7 @@ class DeepGPR(torch.autograd.Function):
         pmlthick=ctx.pmlthick
         device=ctx.device
         Eall=ctx.Eall
+        model_gradient_sampling_interval = ctx.model_gradient_sampling_interval
 
         Eall=Eall.contiguous()
         gEx=gEx.contiguous()
@@ -232,7 +227,6 @@ class DeepGPR(torch.autograd.Function):
         Hupdatecoffs1=torch.zeros((nx+1,ny+1,nz+1), device=device, dtype=dtype)
         Hupdatecoffs4=torch.zeros((nx+1,ny+1,nz+1), device=device, dtype=dtype)
 
-
         if er.requires_grad:
             grad_er=torch.zeros((nx,ny,nz),device=device,dtype=dtype).contiguous()
             errequiregrad=1
@@ -251,17 +245,17 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(ere.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(see.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(mr.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                ctypes.cast(Eall.data_ptr(), ctypes.POINTER(ctypes.c_float)),
+                ctypes.cast(Eall.data_ptr(), ctypes.POINTER(ctypes.c_float)),               
                 ctypes.cast(gEx.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gEy.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gEz.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gHx.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gHy.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                ctypes.cast(gHz.data_ptr(), ctypes.POINTER(ctypes.c_float)), #10
+                ctypes.cast(gHz.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
 
                 ctypes.cast(Eupdatecoffs0.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(Eupdatecoffs1.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(Eupdatecoffs4.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(Hupdatecoffs0.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                ctypes.cast(Hupdatecoffs1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(Hupdatecoffs4.data_ptr(), ctypes.POINTER(ctypes.c_float)), #16
+                ctypes.cast(Hupdatecoffs1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(Hupdatecoffs4.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
 
                 ctypes.cast(gx0EPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gx0EPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gx0HPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gx0HPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)),
@@ -274,7 +268,7 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(gz0EPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gz0EPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gz0HPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gz0HPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 ctypes.cast(gzmEPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gzmEPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)),
-                ctypes.cast(gzmHPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gzmHPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)), #40
+                ctypes.cast(gzmHPhi1.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(gzmHPhi2.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
 
                 pmlthick[0],pmlthick[1],pmlthick[2],
                 pmlthick[3],pmlthick[4],pmlthick[5],
@@ -284,13 +278,14 @@ class DeepGPR(torch.autograd.Function):
                 ctypes.cast(z01.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(zm1.data_ptr(), ctypes.POINTER(ctypes.c_float)),                
                 ctypes.cast(x02.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(xm2.data_ptr(), ctypes.POINTER(ctypes.c_float)),               
                 ctypes.cast(y02.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(ym2.data_ptr(), ctypes.POINTER(ctypes.c_float)),         
-                ctypes.cast(z02.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(zm2.data_ptr(), ctypes.POINTER(ctypes.c_float)), #58
+                ctypes.cast(z02.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(zm2.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
 
                 dt, nt, nstep, nrx, dx,
                 nx+1, ny+1, nz+1, nsr,
                 ctypes.cast(receiver_location.data_ptr(), ctypes.POINTER(ctypes.c_int)), ctypes.cast(sourceamp.data_ptr(), ctypes.POINTER(ctypes.c_float)),
                 2,
-                ctypes.cast(grad_er.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(grad_se.data_ptr(), ctypes.POINTER(ctypes.c_float)),errequiregrad,serequiregrad)
+                ctypes.cast(grad_er.data_ptr(), ctypes.POINTER(ctypes.c_float)), ctypes.cast(grad_se.data_ptr(), ctypes.POINTER(ctypes.c_float)),errequiregrad,serequiregrad,
+                model_gradient_sampling_interval)  
         
         check_tensors_for_nan_inf(d="backward",
             gEx=gEx, gEy=gEy, gEz=gEz,
@@ -311,8 +306,8 @@ class DeepGPR(torch.autograd.Function):
 
         ctx.Eall = None
         del Eall,er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see, Eupdatecoffs0, Eupdatecoffs1, Eupdatecoffs4, Hupdatecoffs0, Hupdatecoffs1, Hupdatecoffs4
-        torch.cuda.empty_cache()
 
+        # 返回与前向传播参数一一对应（最后补齐 use_async_offload 占位）
         return (
                     grad_er, grad_se,         
                     gEx,gEy,gEz, gHx,gHy,gHz, 
@@ -326,5 +321,6 @@ class DeepGPR(torch.autograd.Function):
                     None, None, None, None, None, None, None,
                     None, None, None, None, None, None, None, None,
                     None, None, None, None, None, None, None, None, 
-                    None, None, None, None, None, None, None
+                    None, None, None, None, None, None, None, None, 
+                    None  
                 )

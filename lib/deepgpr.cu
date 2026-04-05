@@ -1,21 +1,12 @@
 #include <cuda_runtime.h>
 #include <iostream>
 #include <stdio.h>
+#include <cfloat>
 
 __constant__ float e0 = 8.8541878128e-12;
 __constant__ float m0 = 1.25663706212e-06;
 
 #define CEIL_DIV(x,y) (((x)+(y)-1)/(y))
-#define INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS) (i)*(NY_FIELDS)*(NZ_FIELDS)+(j)*(NZ_FIELDS)+(k)
-#define INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ) ((s)*(NX)*(NY)*(NZ) + (i)*(NY)*(NZ) + (j)*(NZ) + (k))
-#define INDEX4D_RXS(s, c, t, rx, NY_RXS, N_ITER, NRX) ((s)*(NY_RXS)*(N_ITER)*(NRX) + (c)*(N_ITER)*(NRX) + (t)*(NRX) + (rx))
-#define INDEX3D_RXCOORDS(s, rx, d, NRX, DIM) ((s)*(NRX)*(DIM) + (rx)*(DIM) + (d))
-
-#define INDEX2D_R(m, n,NY_R) (m)*(NY_R)+(n)
-#define INDEX3D_R(c, m, n, M, NY_R) ((c) * (M) * (NY_R) + (m) * (NY_R) + (n))
-
-#define INDEX4D_PHI1(p, i, j, k,NX_PHI1,NY_PHI1,NZ_PHI1) (p)*(NX_PHI1)*(NY_PHI1)*(NZ_PHI1)+(i)*(NY_PHI1)*(NZ_PHI1)+(j)*(NZ_PHI1)+(k)
-#define INDEX4D_PHI2(p, i, j, k,NX_PHI2,NY_PHI2,NZ_PHI2) (p)*(NX_PHI2)*(NY_PHI2)*(NZ_PHI2)+(i)*(NY_PHI2)*(NZ_PHI2)+(j)*(NZ_PHI2)+(k)
 
 #define CUDA_CHECK() {\
     cudaError_t err = cudaGetLastError();\
@@ -26,2027 +17,826 @@ __constant__ float m0 = 1.25663706212e-06;
     }\
 }
 
-
-__global__ void ucgetforward(const float* __restrict__ er,const float* __restrict__ se,
-    const float* __restrict__ mr,
+// ---------------------------------------------------------
+// 系数获取核函数
+// ---------------------------------------------------------
+__global__ void ucgetforward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,
     float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
     float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
-    int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,float dt,float dx) 
+    int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS, float dt, float dx) 
 {
     long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long long i = idx / (NY_FIELDS * NZ_FIELDS);
-    long long j = (idx % (NY_FIELDS * NZ_FIELDS)) / NZ_FIELDS;
-    long long k = (idx % (NY_FIELDS * NZ_FIELDS)) % NZ_FIELDS;
+    long long ny_nz = (long long)NY_FIELDS * NZ_FIELDS;
+    if (idx >= (long long)NX_FIELDS * ny_nz) return;
+
+    long long i = idx / ny_nz;
+    long long rem = idx % ny_nz;
+    long long j = rem / NZ_FIELDS;
+    long long k = rem % NZ_FIELDS;
 
     if (i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1) ) {
+        float HA = m0 * mr[idx] / dt;
+        uH0[idx] = 1.0f;
+        uH1[idx] = (1.0f / dx) / HA;
+        uH4[idx] = 1.0f / HA;
 
-        float HA = m0 * mr[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt;
-        uH0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1;
-        uH1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / HA;
-        uH4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / HA;
-
-        if (se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] > 100) {
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-
+        if (se[idx] > 100.0f) {
+            uE0[idx] = 0.0f; uE1[idx] = 0.0f; uE4[idx] = 0.0f;
         } else {
-            float EA = (e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt) + 0.5 * se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)];
-            float EB = (e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt) - 0.5 * se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)];
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = EB / EA;
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / EA;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / EA;
-
+            float e_term = e0 * er[idx] / dt;
+            float s_term = 0.5f * se[idx];
+            float EA = e_term + s_term;
+            float EB = e_term - s_term;
+            uE0[idx] = EB / EA;
+            uE1[idx] = (1.0f / dx) / EA;
+            uE4[idx] = 1.0f / EA;
         }
     }
 }
 
-
-__global__ void ucgetback(const float* __restrict__ er,const float* __restrict__ se,
-    const float* __restrict__ mr,
+__global__ void ucgetbackward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,
     float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
     float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
-    int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,float dt,float dx) 
+    int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS, float dt, float dx) 
 {
     long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long long i = idx / (NY_FIELDS * NZ_FIELDS);
-    long long j = (idx % (NY_FIELDS * NZ_FIELDS)) / NZ_FIELDS;
-    long long k = (idx % (NY_FIELDS * NZ_FIELDS)) % NZ_FIELDS;
+    long long ny_nz = (long long)NY_FIELDS * NZ_FIELDS;
+    if (idx >= (long long)NX_FIELDS * ny_nz) return;
+
+    long long i = idx / ny_nz;
+    long long rem = idx % ny_nz;
+    long long j = rem / NZ_FIELDS;
+    long long k = rem % NZ_FIELDS;
 
     if (i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1) ) {
-        float HA = m0 * mr[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt;
-        uH0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1;
-        uH1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / HA;
-        uH4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / HA;
+        float HA = m0 * mr[idx] / dt;
+        uH0[idx] = 1.0f;
+        uH1[idx] = (1.0f / dx) / HA;
+        uH4[idx] = 1.0f / HA;
 
-        if (se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] > 100) {
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-
+        if (se[idx] > 100.0f) {
+            uE0[idx] = 0.0f; uE1[idx] = 0.0f; uE4[idx] = 0.0f;
         } else {
-            float EA = (e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt) + 0.5 * se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)];
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] =(2*e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)])/(2*e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)]+se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)]*dt);
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / EA;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / EA;
+            float EA = (e0 * er[idx] / dt) + 0.5f * se[idx];
+            uE0[idx] = (2.0f * e0 * er[idx]) / (2.0f * e0 * er[idx] + se[idx] * dt);
+            uE1[idx] = (1.0f / dx) / EA;
+            uE4[idx] = 1.0f / EA;
         }
     }
 }
 
-
-
-
-__global__ void ucgetbackward(const float* __restrict__ er,const float* __restrict__ se,
-    const float* __restrict__ mr,
-    float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
-    float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
-    int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,float dt,float dx) 
-{
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    long long i = idx / (NY_FIELDS * NZ_FIELDS);
-    long long j = (idx % (NY_FIELDS * NZ_FIELDS)) / NZ_FIELDS;
-    long long k = (idx % (NY_FIELDS * NZ_FIELDS)) % NZ_FIELDS;
-
-    if (i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1) ) {
-        float HA = m0 * mr[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt;
-        uH0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1;
-        uH1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / HA;
-        uH4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / HA;
-        if (se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] > 100) {
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 0;
-        } else {
-            float EA = (e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] / dt) + 0.5 * se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)];
-            uE0[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] =(2*e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)])/(2*e0 * er[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)]+se[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)]*dt);
-            uE1[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = (1 / dx) * 1 / EA;
-            uE4[INDEX3D_FIELDS(i, j, k,NY_FIELDS,NZ_FIELDS)] = 1 / EA;
-
-        }
-    }
-}
-
-
-
+// ---------------------------------------------------------
+// 接收端保存
+// ---------------------------------------------------------
 __global__ void store_outputs(
     int step, int NRX, int iteration,
-    const int* __restrict__ receiverlocation,
-    float* __restrict__ rxs,
-    const float* __restrict__ Ex, const float* __restrict__ Ey,
-    const float* __restrict__ Ez, const float* __restrict__ Hx,
-    const float* __restrict__ Hy, const float* __restrict__ Hz,
-    int NX, int NY, int NZ, int N_ITER
-) {
-    // 全局一维索引
-    long long tid = blockIdx.x * blockDim.x + threadIdx.x;
-    long long total = step * NRX;
-    if (tid >= total) return;
+    const int* __restrict__ receiverlocation, float* __restrict__ rxs,
+    const float* __restrict__ Ex, const float* __restrict__ Ey, const float* __restrict__ Ez, 
+    const float* __restrict__ Hx, const float* __restrict__ Hy, const float* __restrict__ Hz,
+    int NX, int NY, int NZ, int N_ITER) 
+{
+    long long rx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (rx >= NRX) return;
 
-    // 反算 s 和 rx
-    long long s  = tid / NRX;    // 时间步
-    long long rx = tid % NRX;    // 接收机编号
+    long long field_stride = (long long)NX * NY * NZ;
 
-    // 提取接收机坐标
-    long long i = receiverlocation[s * NRX * 3 + rx * 3 + 0];
-    long long j = receiverlocation[s * NRX * 3 + rx * 3 + 1];
-    long long k = receiverlocation[s * NRX * 3 + rx * 3 + 2];
+    for (int s = 0; s < step; ++s) {
+        long long i = receiverlocation[s * NRX * 3 + rx * 3 + 0];
+        long long j = receiverlocation[s * NRX * 3 + rx * 3 + 1];
+        long long k = receiverlocation[s * NRX * 3 + rx * 3 + 2];
 
-    // 存储电场
-    rxs[((s * 6 + 0) * N_ITER + iteration) * NRX + rx] = Ex[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
-    rxs[((s * 6 + 1) * N_ITER + iteration) * NRX + rx] = Ey[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
-    rxs[((s * 6 + 2) * N_ITER + iteration) * NRX + rx] = Ez[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
+        long long id4 = s * field_stride + i * NY * NZ + j * NZ + k;
 
-    // 存储磁场
-    rxs[((s * 6 + 3) * N_ITER + iteration) * NRX + rx] = Hx[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
-    rxs[((s * 6 + 4) * N_ITER + iteration) * NRX + rx] = Hy[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
-    rxs[((s * 6 + 5) * N_ITER + iteration) * NRX + rx] = Hz[INDEX4D_FIELDS(s,i,j,k,NX,NY,NZ)];
+        rxs[((s * 6 + 0) * N_ITER + iteration) * NRX + rx] = Ex[id4];
+        rxs[((s * 6 + 1) * N_ITER + iteration) * NRX + rx] = Ey[id4];
+        rxs[((s * 6 + 2) * N_ITER + iteration) * NRX + rx] = Ez[id4];
+        rxs[((s * 6 + 3) * N_ITER + iteration) * NRX + rx] = Hx[id4];
+        rxs[((s * 6 + 4) * N_ITER + iteration) * NRX + rx] = Hy[id4];
+        rxs[((s * 6 + 5) * N_ITER + iteration) * NRX + rx] = Hz[id4];
+    }
 }
 
-
-
-
-
+// ---------------------------------------------------------
+// 震源更新
+// ---------------------------------------------------------
 __global__ void Update_hertzian_dipole(
     int step, int iteration, float dx, 
     const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
     float* __restrict__ Ex, float* __restrict__ Ey, float* __restrict__ Ez, const float* __restrict__ uE4,
-    int NX, int NY, int NZ, int nsrc, int polarisation,int nt
-) {
-    long long src = blockIdx.x * blockDim.x + threadIdx.x; // 对应源维度
-    long long s = blockIdx.y * blockDim.y + threadIdx.y;   // 对应 step 维度
+    int NX, int NY, int NZ, int nsrc, int polarisation, int nt) 
+{
+    long long src = blockIdx.x * blockDim.x + threadIdx.x; 
+    if (src >= nsrc) return;
 
-    if (src < nsrc && s < step) {
-        // 从 sourcelocation 中获取源位置信息 (i, j, k)
+    float waveform_value = srcwaveforms[src * nt + iteration];
+    float scale = waveform_value * dx / (dx * dx * dx);  
+    long long field_stride = (long long)NX * NY * NZ;
+
+    for (int s = 0; s < step; ++s) {
         long long i = sourcelocation[s * nsrc * 3 + src * 3 + 0];
         long long j = sourcelocation[s * nsrc * 3 + src * 3 + 1];
         long long k = sourcelocation[s * nsrc * 3 + src * 3 + 2];
 
-        float dl = dx; // 每个源可能有不同的 dl 值
-        float waveform_value = srcwaveforms[src * nt + iteration];// 获取第 src 个源在当前迭代的波形值
-        float scale = waveform_value * dl / (dx * dx * dx);   //printf("%d %d %f \n",src,s,scale);
-        // printf("%d %d %d %d %f %f %f\n",s,i,j,k,dl,waveform_value,scale);
-// printf("%f %f %f\n",dl,waveform_value,scale);
+        long long id3 = i * NY * NZ + j * NZ + k;
+        long long id4 = s * field_stride + id3;
 
-            if (polarisation == 0) {
-                Ex[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= uE4[INDEX3D_FIELDS(i, j, k, NY, NZ)] * scale;
+        if (polarisation == 0) Ex[id4] -= uE4[id3] * scale;
+        else if (polarisation == 1) Ey[id4] -= uE4[id3] * scale;
+        else if (polarisation == 2) Ez[id4] -= uE4[id3] * scale;
+    }
+}
+
+// ---------------------------------------------------------
+// 融合：电场全局更新 + 全侧 PML 边界修正
+// ---------------------------------------------------------
+__global__ void fused_e_fields_updates_gpu(
+    const float* __restrict__ uE0, const float* __restrict__ uE1,  
+    float* __restrict__ Ex, float* __restrict__ Ey, float* __restrict__ Ez,  
+    const float* __restrict__ Hx, const float* __restrict__ Hy, const float* __restrict__ Hz,
+    float dx, float dy, float dz,
+    int step, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,
+    int pml0, int pml1, int pml2, int pml3, int pml4, int pml5,
+    const float* __restrict__ x0ER, const float* __restrict__ xmER,
+    const float* __restrict__ y0ER, const float* __restrict__ ymER,
+    const float* __restrict__ z0ER, const float* __restrict__ zmER,
+    const float* __restrict__ updatecoeffsE,
+    float* __restrict__ x0EPhi1, float* __restrict__ x0EPhi2,
+    float* __restrict__ xmEPhi1, float* __restrict__ xmEPhi2,
+    float* __restrict__ y0EPhi1, float* __restrict__ y0EPhi2,
+    float* __restrict__ ymEPhi1, float* __restrict__ ymEPhi2,
+    float* __restrict__ z0EPhi1, float* __restrict__ z0EPhi2,
+    float* __restrict__ zmEPhi1, float* __restrict__ zmEPhi2)
+{
+    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long long ny_nz = (long long)NY_FIELDS * NZ_FIELDS;
+    long long field_stride = (long long)NX_FIELDS * ny_nz;
+    if (idx >= field_stride) return;
+
+    long long i = idx / ny_nz;
+    long long rem = idx % ny_nz;
+    long long j = rem / NZ_FIELDS;
+    long long k = rem % NZ_FIELDS;
+
+    bool do_ex = (((NY_FIELDS-1) != 1 || (NZ_FIELDS-1) != 1) && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1));
+    bool do_ey = (((NX_FIELDS-1) != 1 || (NZ_FIELDS-1) != 1) && i > 0 && i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1));
+    bool do_ez = (((NX_FIELDS-1) != 1 || (NY_FIELDS-1) != 1) && i > 0 && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1));
+
+    bool in_x0 = (pml0 > 0 && i <= pml0 && j < NY_FIELDS && k < NZ_FIELDS);
+    bool in_xm = (pml1 > 0 && i >= NX_FIELDS - 1 - pml1 && i < NX_FIELDS && j < NY_FIELDS && k < NZ_FIELDS);
+    bool in_y0 = (pml2 > 0 && i < NX_FIELDS && j <= pml2 && k < NZ_FIELDS);
+    bool in_ym = (pml3 > 0 && i < NX_FIELDS && j >= NY_FIELDS - 1 - pml3 && j < NY_FIELDS && k < NZ_FIELDS);
+    bool in_z0 = (pml4 > 0 && i < NX_FIELDS && j < NY_FIELDS && k <= pml4);
+    bool in_zm = (pml5 > 0 && i < NX_FIELDS && j < NY_FIELDS && k >= NZ_FIELDS - 1 - pml5 && k < NZ_FIELDS);
+
+    float ue0 = uE0[idx];
+    float ue1 = uE1[idx];
+    float upd = updatecoeffsE[idx];
+
+    long long id4 = idx; 
+
+    for (int s = 0; s < step; ++s) {
+        if (do_ex) Ex[id4] = ue0 * Ex[id4] + ue1 * (Hz[id4] - Hz[id4 - NZ_FIELDS]) - ue1 * (Hy[id4] - Hy[id4 - 1]);
+        if (do_ey) Ey[id4] = ue0 * Ey[id4] + ue1 * (Hx[id4] - Hx[id4 - 1]) - ue1 * (Hz[id4] - Hz[id4 - ny_nz]);
+        if (do_ez) Ez[id4] = ue0 * Ez[id4] + ue1 * (Hy[id4] - Hy[id4 - ny_nz]) - ue1 * (Hx[id4] - Hx[id4 - NZ_FIELDS]);
+
+        if (in_x0) {
+            long long i1 = pml0 - i;
+            float RA01 = x0ER[i1] - 1.0f, RB0 = x0ER[pml0 + i1], RE0 = x0ER[2 * pml0 + i1], RF0 = x0ER[3 * pml0 + i1];
+            if (j < NY_FIELDS - 1 && i > 0) {
+                float dHz = (Hz[id4] - Hz[id4 - ny_nz]) / dx;
+                long long p_idx = ((long long)s * (pml0+1) * (NY_FIELDS-1) * NZ_FIELDS) + i1 * (NY_FIELDS-1) * NZ_FIELDS + j * NZ_FIELDS + k;
+                float phi = x0EPhi1[p_idx];
+                Ey[id4] -= upd * (RA01 * dHz + RB0 * phi);
+                x0EPhi1[p_idx] = RE0 * phi - RF0 * dHz;
             }
-            else if (polarisation == 1) {
-                Ey[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= uE4[INDEX3D_FIELDS(i, j, k, NY, NZ)] * scale;
-            }
-            else if (polarisation == 2){
-                Ez[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= uE4[INDEX3D_FIELDS(i, j, k, NY, NZ)] * scale;
+            if (k < NZ_FIELDS - 1 && i > 0) {
+                float dHy = (Hy[id4] - Hy[id4 - ny_nz]) / dx;
+                long long p_idx = ((long long)s * (pml0+1) * NY_FIELDS * (NZ_FIELDS-1)) + i1 * NY_FIELDS * (NZ_FIELDS-1) + j * (NZ_FIELDS-1) + k;
+                float phi = x0EPhi2[p_idx];
+                Ez[id4] += upd * (RA01 * dHy + RB0 * phi);
+                x0EPhi2[p_idx] = RE0 * phi - RF0 * dHy;
             }
         }
-    }
 
+        if (in_xm) {
+            long long i1 = i - (NX_FIELDS - 1 - pml1);
+            float RA01 = xmER[i1] - 1.0f, RB0 = xmER[pml1 + i1], RE0 = xmER[2 * pml1 + i1], RF0 = xmER[3 * pml1 + i1];
+            if (j < NY_FIELDS - 1 && i > 0) {
+                float dHz = (Hz[id4] - Hz[id4 - ny_nz]) / dx;
+                long long p_idx = ((long long)s * (pml1+1) * (NY_FIELDS-1) * NZ_FIELDS) + i1 * (NY_FIELDS-1) * NZ_FIELDS + j * NZ_FIELDS + k;
+                float phi = xmEPhi1[p_idx];
+                Ey[id4] -= upd * (RA01 * dHz + RB0 * phi);
+                xmEPhi1[p_idx] = RE0 * phi - RF0 * dHz;
+            }
+            if (k < NZ_FIELDS - 1 && i > 0) {
+                float dHy = (Hy[id4] - Hy[id4 - ny_nz]) / dx;
+                long long p_idx = ((long long)s * (pml1+1) * NY_FIELDS * (NZ_FIELDS-1)) + i1 * NY_FIELDS * (NZ_FIELDS-1) + j * (NZ_FIELDS-1) + k;
+                float phi = xmEPhi2[p_idx];
+                Ez[id4] += upd * (RA01 * dHy + RB0 * phi);
+                xmEPhi2[p_idx] = RE0 * phi - RF0 * dHy;
+            }
+        }
 
+        if (in_y0) {
+            long long j1 = pml2 - j;
+            float RA01 = y0ER[j1] - 1.0f, RB0 = y0ER[pml2 + j1], RE0 = y0ER[2 * pml2 + j1], RF0 = y0ER[3 * pml2 + j1];
+            if (i < NX_FIELDS - 1 && j > 0) {
+                float dHz = (Hz[id4] - Hz[id4 - NZ_FIELDS]) / dy;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * (pml2+1) * NZ_FIELDS) + i * (pml2+1) * NZ_FIELDS + j1 * NZ_FIELDS + k;
+                float phi = y0EPhi1[p_idx];
+                Ex[id4] += upd * (RA01 * dHz + RB0 * phi);
+                y0EPhi1[p_idx] = RE0 * phi - RF0 * dHz;
+            }
+            if (k < NZ_FIELDS - 1 && j > 0) {
+                float dHx = (Hx[id4] - Hx[id4 - NZ_FIELDS]) / dy;
+                long long p_idx = ((long long)s * NX_FIELDS * (pml2+1) * (NZ_FIELDS-1)) + i * (pml2+1) * (NZ_FIELDS-1) + j1 * (NZ_FIELDS-1) + k;
+                float phi = y0EPhi2[p_idx];
+                Ez[id4] -= upd * (RA01 * dHx + RB0 * phi);
+                y0EPhi2[p_idx] = RE0 * phi - RF0 * dHx;
+            }
+        }
 
+        if (in_ym) {
+            long long j1 = j - (NY_FIELDS - 1 - pml3);
+            float RA01 = ymER[j1] - 1.0f, RB0 = ymER[pml3 + j1], RE0 = ymER[2 * pml3 + j1], RF0 = ymER[3 * pml3 + j1];
+            if (i < NX_FIELDS - 1 && j > 0) {
+                float dHz = (Hz[id4] - Hz[id4 - NZ_FIELDS]) / dy;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * (pml3+1) * NZ_FIELDS) + i * (pml3+1) * NZ_FIELDS + j1 * NZ_FIELDS + k;
+                float phi = ymEPhi1[p_idx];
+                Ex[id4] += upd * (RA01 * dHz + RB0 * phi);
+                ymEPhi1[p_idx] = RE0 * phi - RF0 * dHz;
+            }
+            if (k < NZ_FIELDS - 1 && j > 0) {
+                float dHx = (Hx[id4] - Hx[id4 - NZ_FIELDS]) / dy;
+                long long p_idx = ((long long)s * NX_FIELDS * (pml3+1) * (NZ_FIELDS-1)) + i * (pml3+1) * (NZ_FIELDS-1) + j1 * (NZ_FIELDS-1) + k;
+                float phi = ymEPhi2[p_idx];
+                Ez[id4] -= upd * (RA01 * dHx + RB0 * phi);
+                ymEPhi2[p_idx] = RE0 * phi - RF0 * dHx;
+            }
+        }
 
-__global__ void e_fields_updates_gpu(
-    const float* __restrict__ uE0, const float* __restrict__ uE1,  
-     float* __restrict__ Ex,  float* __restrict__ Ey,
-     float* __restrict__ Ez,  const float* __restrict__ Hx,
-     const float* __restrict__ Hy,  const float* __restrict__ Hz,
-    int step, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS
-) {
+        if (in_z0) {
+            long long k1 = pml4 - k;
+            float RA01 = z0ER[k1] - 1.0f, RB0 = z0ER[pml4 + k1], RE0 = z0ER[2 * pml4 + k1], RF0 = z0ER[3 * pml4 + k1];
+            if (i < NX_FIELDS - 1 && k > 0) {
+                float dHy = (Hy[id4] - Hy[id4 - 1]) / dz;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * NY_FIELDS * (pml4+1)) + i * NY_FIELDS * (pml4+1) + j * (pml4+1) + k1;
+                float phi = z0EPhi1[p_idx];
+                Ex[id4] -= upd * (RA01 * dHy + RB0 * phi);
+                z0EPhi1[p_idx] = RE0 * phi - RF0 * dHy;
+            }
+            if (j < NY_FIELDS - 1 && k > 0) {
+                float dHx = (Hx[id4] - Hx[id4 - 1]) / dz;
+                long long p_idx = ((long long)s * NX_FIELDS * (NY_FIELDS-1) * (pml4+1)) + i * (NY_FIELDS-1) * (pml4+1) + j * (pml4+1) + k1;
+                float phi = z0EPhi2[p_idx];
+                Ey[id4] += upd * (RA01 * dHx + RB0 * phi);
+                z0EPhi2[p_idx] = RE0 * phi - RF0 * dHx;
+            }
+        }
 
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t total_cells_per_step = NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    // int s = idx / total_cells_per_step;          // step 索引
-    // int remainder = idx % total_cells_per_step;  // step 内的线性索引
-    // int i = remainder / (NY_FIELDS * NZ_FIELDS);
-    // int j = (remainder / NZ_FIELDS) % NY_FIELDS;
-    // int k = remainder % NZ_FIELDS;
+        if (in_zm) {
+            long long k1 = k - (NZ_FIELDS - 1 - pml5);
+            float RA01 = zmER[k1] - 1.0f, RB0 = zmER[pml5 + k1], RE0 = zmER[2 * pml5 + k1], RF0 = zmER[3 * pml5 + k1];
+            if (i < NX_FIELDS - 1 && k > 0) {
+                float dHy = (Hy[id4] - Hy[id4 - 1]) / dz;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * NY_FIELDS * (pml5+1)) + i * NY_FIELDS * (pml5+1) + j * (pml5+1) + k1;
+                float phi = zmEPhi1[p_idx];
+                Ex[id4] -= upd * (RA01 * dHy + RB0 * phi);
+                zmEPhi1[p_idx] = RE0 * phi - RF0 * dHy;
+            }
+            if (j < NY_FIELDS - 1 && k > 0) {
+                float dHx = (Hx[id4] - Hx[id4 - 1]) / dz;
+                long long p_idx = ((long long)s * NX_FIELDS * (NY_FIELDS-1) * (pml5+1)) + i * (NY_FIELDS-1) * (pml5+1) + j * (pml5+1) + k1;
+                float phi = zmEPhi2[p_idx];
+                Ey[id4] += upd * (RA01 * dHx + RB0 * phi);
+                zmEPhi2[p_idx] = RE0 * phi - RF0 * dHx;
+            }
+        }
 
-    long long s = idx / total_cells_per_step;
-    long long i = idx % total_cells_per_step / (NY_FIELDS * NZ_FIELDS);
-    long long j = (idx % total_cells_per_step % (NY_FIELDS * NZ_FIELDS)) / NZ_FIELDS;
-    long long k = idx % total_cells_per_step % NZ_FIELDS;
-
-    size_t total = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    if (idx >= total) return;
-    // // Ex 
-    if (((NY_FIELDS-1) != 1 || (NZ_FIELDS-1) != 1)  && s < step && i >= 0 && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1)) {
-        Ex[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] = 
-            uE0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] * 
-            Ex[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] + 
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hz[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Hz[INDEX4D_FIELDS(s, i, j-1, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]) - 
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hy[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Hy[INDEX4D_FIELDS(s, i, j, k-1, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
-    }
-
-    // Ey 
-    if (((NX_FIELDS-1) != 1 || (NZ_FIELDS-1) != 1) && s < step && i > 0 && i < (NX_FIELDS-1) && j >= 0 && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1)) {
-
-        Ey[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] = 
-            uE0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            Ey[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] + 
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hx[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Hx[INDEX4D_FIELDS(s, i, j, k-1, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]) - 
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hz[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Hz[INDEX4D_FIELDS(s, i-1, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
-    }
-
-    //Ez
-    if (((NX_FIELDS-1) != 1 || (NY_FIELDS-1) != 1) && s < step && i > 0 && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k >= 0 && k < (NZ_FIELDS-1)) {
-
-        Ez[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] =
-            uE0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            Ez[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] +
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hy[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Hy[INDEX4D_FIELDS(s, i - 1, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]) -
-            uE1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Hx[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Hx[INDEX4D_FIELDS(s, i, j - 1, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
+        id4 += field_stride;
     }
 }
 
-
-
-__global__ void h_fields_updates_gpu(
-    const float* __restrict__ uH0, const float* __restrict__ uH1,      
-    const float* __restrict__ Ex,  const float* __restrict__ Ey,
-     const float* __restrict__ Ez,  float* __restrict__ Hx,
-     float* __restrict__ Hy,  float* __restrict__ Hz,
-    int step, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS
-) {
+// ---------------------------------------------------------
+// 融合：磁场全局更新 + 全侧 PML 边界修正
+// ---------------------------------------------------------
+__global__ void fused_h_fields_updates_gpu(
+    const float* __restrict__ uH0, const float* __restrict__ uH1,
+    const float* __restrict__ Ex, const float* __restrict__ Ey, const float* __restrict__ Ez,
+    float* __restrict__ Hx, float* __restrict__ Hy, float* __restrict__ Hz,
+    float dx, float dy, float dz,
+    int step, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,
+    int pml0, int pml1, int pml2, int pml3, int pml4, int pml5,
+    const float* __restrict__ x0HR, const float* __restrict__ xmHR,
+    const float* __restrict__ y0HR, const float* __restrict__ ymHR,
+    const float* __restrict__ z0HR, const float* __restrict__ zmHR,
+    const float* __restrict__ updatecoeffsH,
+    float* __restrict__ x0HPhi1, float* __restrict__ x0HPhi2,
+    float* __restrict__ xmHPhi1, float* __restrict__ xmHPhi2,
+    float* __restrict__ y0HPhi1, float* __restrict__ y0HPhi2,
+    float* __restrict__ ymHPhi1, float* __restrict__ ymHPhi2,
+    float* __restrict__ z0HPhi1, float* __restrict__ z0HPhi2,
+    float* __restrict__ zmHPhi1, float* __restrict__ zmHPhi2)
+{
     long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long long total_cells_per_step = NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    long long s = idx / total_cells_per_step;
-    long long i = idx % total_cells_per_step / (NY_FIELDS * NZ_FIELDS);
-    long long j = (idx % total_cells_per_step % (NY_FIELDS * NZ_FIELDS)) / NZ_FIELDS;
-    long long k = idx % total_cells_per_step % NZ_FIELDS;
+    long long ny_nz = (long long)NY_FIELDS * NZ_FIELDS;
+    long long field_stride = (long long)NX_FIELDS * ny_nz;
+    if (idx >= field_stride) return;
 
-    long long total = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    if (idx >= total) return;
-    // Hx 
-    if ((NX_FIELDS-1) != 1 && s < step && i > 0 && i < (NX_FIELDS-1) && j >= 0 && j < (NY_FIELDS-1) && k >= 0 && k < (NZ_FIELDS-1)) {
-        Hx[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] =
-            uH0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            Hx[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-            uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ez[INDEX4D_FIELDS(s, i, j + 1, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Ez[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)])+
-             uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ey[INDEX4D_FIELDS(s, i, j , k+1, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Ey[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
+    long long i = idx / ny_nz;
+    long long rem = idx % ny_nz;
+    long long j = rem / NZ_FIELDS;
+    long long k = rem % NZ_FIELDS;
 
-    }
+    bool do_hx = ((NX_FIELDS-1) != 1 && i > 0 && i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1));
+    bool do_hy = ((NY_FIELDS-1) != 1 && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k < (NZ_FIELDS-1));
+    bool do_hz = ((NZ_FIELDS-1) != 1 && i < (NX_FIELDS-1) && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1));
 
-    // Hy 
-    if ((NY_FIELDS-1) != 1 && s < step && i >= 0 && i < (NX_FIELDS-1) && j > 0 && j < (NY_FIELDS-1) && k >= 0 && k < (NZ_FIELDS-1)) {
+    bool in_x0 = (pml0 > 0 && i < pml0 && j < NY_FIELDS && k < NZ_FIELDS);
+    bool in_xm = (pml1 > 0 && i >= NX_FIELDS - 1 - pml1 && i < NX_FIELDS - 1 && j < NY_FIELDS && k < NZ_FIELDS);
+    bool in_y0 = (pml2 > 0 && i < NX_FIELDS && j < pml2 && k < NZ_FIELDS);
+    bool in_ym = (pml3 > 0 && i < NX_FIELDS && j >= NY_FIELDS - 1 - pml3 && j < NY_FIELDS - 1 && k < NZ_FIELDS);
+    bool in_z0 = (pml4 > 0 && i < NX_FIELDS && j < NY_FIELDS && k < pml4);
+    bool in_zm = (pml5 > 0 && i < NX_FIELDS && j < NY_FIELDS && k >= NZ_FIELDS - 1 - pml5 && k < NZ_FIELDS - 1);
 
-        Hy[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] =
-            uH0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            Hy[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-            uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ex[INDEX4D_FIELDS(s, i , j, k+1, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Ex[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)])+
-            uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ez[INDEX4D_FIELDS(s, i + 1, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] -
-             Ez[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
-    }
+    float uh0 = uH0[idx];
+    float uh1 = uH1[idx];
+    float upd = updatecoeffsH[idx];
 
-    // Hz 
-    if ((NZ_FIELDS-1) != 1 && s < step  && i >= 0 && i < (NX_FIELDS-1) && j >= 0 && j < (NY_FIELDS-1) && k > 0 && k < (NZ_FIELDS-1)) {
-        Hz[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] = 
-            uH0[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            Hz[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ey[INDEX4D_FIELDS(s, i+1, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Ey[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]) + 
-            uH1[INDEX3D_FIELDS(i,j,k,NY_FIELDS,NZ_FIELDS)] *
-            (Ex[INDEX4D_FIELDS(s, i, j+1, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)] - 
-            Ex[INDEX4D_FIELDS(s, i, j, k, NX_FIELDS, NY_FIELDS, NZ_FIELDS)]);
-    }
+    long long id4 = idx; 
 
-}
+    for (int s = 0; s < step; ++s) {
+        if (do_hx) Hx[id4] = uh0 * Hx[id4] - uh1 * (Ez[id4 + NZ_FIELDS] - Ez[id4]) + uh1 * (Ey[id4 + 1] - Ey[id4]);
+        if (do_hy) Hy[id4] = uh0 * Hy[id4] - uh1 * (Ex[id4 + 1] - Ex[id4]) + uh1 * (Ez[id4 + ny_nz] - Ez[id4]);
+        if (do_hz) Hz[id4] = uh0 * Hz[id4] - uh1 * (Ey[id4 + ny_nz] - Ey[id4]) + uh1 * (Ex[id4 + NZ_FIELDS] - Ex[id4]);
 
+        if (in_x0) {
+            long long i1 = pml0 - 1 - i;
+            float RA01 = x0HR[i1] - 1.0f, RB0 = x0HR[pml0 + i1], RE0 = x0HR[2 * pml0 + i1], RF0 = x0HR[3 * pml0 + i1];
+            if (k < NZ_FIELDS - 1) {
+                float dEz = (Ez[id4 + ny_nz] - Ez[id4]) / dx;
+                long long p_idx = ((long long)s * pml0 * NY_FIELDS * (NZ_FIELDS-1)) + i1 * NY_FIELDS * (NZ_FIELDS-1) + j * (NZ_FIELDS-1) + k;
+                float phi = x0HPhi1[p_idx];
+                Hy[id4] += upd * (RA01 * dEz + RB0 * phi);
+                x0HPhi1[p_idx] = RE0 * phi - RF0 * dEz;
+            }
+            if (j < NY_FIELDS - 1) {
+                float dEy = (Ey[id4 + ny_nz] - Ey[id4]) / dx;
+                long long p_idx = ((long long)s * pml0 * (NY_FIELDS-1) * NZ_FIELDS) + i1 * (NY_FIELDS-1) * NZ_FIELDS + j * NZ_FIELDS + k;
+                float phi = x0HPhi2[p_idx];
+                Hz[id4] -= upd * (RA01 * dEy + RB0 * phi);
+                x0HPhi2[p_idx] = RE0 * phi - RF0 * dEy;
+            }
+        }
 
+        if (in_xm) {
+            long long i1 = i - (NX_FIELDS - 1 - pml1);
+            float RA01 = xmHR[i1] - 1.0f, RB0 = xmHR[pml1 + i1], RE0 = xmHR[2 * pml1 + i1], RF0 = xmHR[3 * pml1 + i1];
+            if (k < NZ_FIELDS - 1) {
+                float dEz = (Ez[id4 + ny_nz] - Ez[id4]) / dx;
+                long long p_idx = ((long long)s * pml1 * NY_FIELDS * (NZ_FIELDS-1)) + i1 * NY_FIELDS * (NZ_FIELDS-1) + j * (NZ_FIELDS-1) + k;
+                float phi = xmHPhi1[p_idx];
+                Hy[id4] += upd * (RA01 * dEz + RB0 * phi);
+                xmHPhi1[p_idx] = RE0 * phi - RF0 * dEz;
+            }
+            if (j < NY_FIELDS - 1) {
+                float dEy = (Ey[id4 + ny_nz] - Ey[id4]) / dx;
+                long long p_idx = ((long long)s * pml1 * (NY_FIELDS-1) * NZ_FIELDS) + i1 * (NY_FIELDS-1) * NZ_FIELDS + j * NZ_FIELDS + k;
+                float phi = xmHPhi2[p_idx];
+                Hz[id4] -= upd * (RA01 * dEy + RB0 * phi);
+                xmHPhi2[p_idx] = RE0 * phi - RF0 * dEy;
+            }
+        }
 
+        if (in_y0) {
+            long long j1 = pml2 - 1 - j;
+            float RA01 = y0HR[j1] - 1.0f, RB0 = y0HR[pml2 + j1], RE0 = y0HR[2 * pml2 + j1], RF0 = y0HR[3 * pml2 + j1];
+            if (i < NX_FIELDS && k < NZ_FIELDS - 1) {
+                float dEz = (Ez[id4 + NZ_FIELDS] - Ez[id4]) / dy;
+                long long p_idx = ((long long)s * NX_FIELDS * pml2 * (NZ_FIELDS-1)) + i * pml2 * (NZ_FIELDS-1) + j1 * (NZ_FIELDS-1) + k;
+                float phi = y0HPhi1[p_idx];
+                Hx[id4] -= upd * (RA01 * dEz + RB0 * phi);
+                y0HPhi1[p_idx] = RE0 * phi - RF0 * dEz;
+            }
+            if (i < NX_FIELDS - 1 && k < NZ_FIELDS) {
+                float dEx = (Ex[id4 + NZ_FIELDS] - Ex[id4]) / dy;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * pml2 * NZ_FIELDS) + i * pml2 * NZ_FIELDS + j1 * NZ_FIELDS + k;
+                float phi = y0HPhi2[p_idx];
+                Hz[id4] += upd * (RA01 * dEx + RB0 * phi);
+                y0HPhi2[p_idx] = RE0 * phi - RF0 * dEx;
+            }
+        }
 
+        if (in_ym) {
+            long long j1 = j - (NY_FIELDS - 1 - pml3);
+            float RA01 = ymHR[j1] - 1.0f, RB0 = ymHR[pml3 + j1], RE0 = ymHR[2 * pml3 + j1], RF0 = ymHR[3 * pml3 + j1];
+            if (i < NX_FIELDS && k < NZ_FIELDS - 1) {
+                float dEz = (Ez[id4 + NZ_FIELDS] - Ez[id4]) / dy;
+                long long p_idx = ((long long)s * NX_FIELDS * pml3 * (NZ_FIELDS-1)) + i * pml3 * (NZ_FIELDS-1) + j1 * (NZ_FIELDS-1) + k;
+                float phi = ymHPhi1[p_idx];
+                Hx[id4] -= upd * (RA01 * dEz + RB0 * phi);
+                ymHPhi1[p_idx] = RE0 * phi - RF0 * dEz;
+            }
+            if (i < NX_FIELDS - 1 && k < NZ_FIELDS) {
+                float dEx = (Ex[id4 + NZ_FIELDS] - Ex[id4]) / dy;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * pml3 * NZ_FIELDS) + i * pml3 * NZ_FIELDS + j1 * NZ_FIELDS + k;
+                float phi = ymHPhi2[p_idx];
+                Hz[id4] += upd * (RA01 * dEx + RB0 * phi);
+                ymHPhi2[p_idx] = RE0 * phi - RF0 * dEx;
+            }
+        }
 
+        if (in_z0) {
+            long long k1 = pml4 - 1 - k;
+            float RA01 = z0HR[k1] - 1.0f, RB0 = z0HR[pml4 + k1], RE0 = z0HR[2 * pml4 + k1], RF0 = z0HR[3 * pml4 + k1];
+            if (i < NX_FIELDS && j < NY_FIELDS - 1) {
+                float dEy = (Ey[id4 + 1] - Ey[id4]) / dz;
+                long long p_idx = ((long long)s * NX_FIELDS * (NY_FIELDS-1) * pml4) + i * (NY_FIELDS-1) * pml4 + j * pml4 + k1;
+                float phi = z0HPhi1[p_idx];
+                Hx[id4] += upd * (RA01 * dEy + RB0 * phi);
+                z0HPhi1[p_idx] = RE0 * phi - RF0 * dEy;
+            }
+            if (i < NX_FIELDS - 1 && j < NY_FIELDS) {
+                float dEx = (Ex[id4 + 1] - Ex[id4]) / dz;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * NY_FIELDS * pml4) + i * NY_FIELDS * pml4 + j * pml4 + k1;
+                float phi = z0HPhi2[p_idx];
+                Hy[id4] -= upd * (RA01 * dEx + RB0 * phi);
+                z0HPhi2[p_idx] = RE0 * phi - RF0 * dEx;
+            }
+        }
 
-__global__ void x0H(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,   float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,   float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz,  float *PHI1,  float *PHI2,   const float* __restrict__ R,  float dx ,const float* __restrict__ updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
+        if (in_zm) {
+            long long k1 = k - (NZ_FIELDS - 1 - pml5);
+            float RA01 = zmHR[k1] - 1.0f, RB0 = zmHR[pml5 + k1], RE0 = zmHR[2 * pml5 + k1], RF0 = zmHR[3 * pml5 + k1];
+            if (i < NX_FIELDS && j < NY_FIELDS - 1) {
+                float dEy = (Ey[id4 + 1] - Ey[id4]) / dz;
+                long long p_idx = ((long long)s * NX_FIELDS * (NY_FIELDS-1) * pml5) + i * (NY_FIELDS-1) * pml5 + j * pml5 + k1;
+                float phi = zmHPhi1[p_idx];
+                Hx[id4] += upd * (RA01 * dEy + RB0 * phi);
+                zmHPhi1[p_idx] = RE0 * phi - RF0 * dEy;
+            }
+            if (i < NX_FIELDS - 1 && j < NY_FIELDS) {
+                float dEx = (Ex[id4 + 1] - Ex[id4]) / dz;
+                long long p_idx = ((long long)s * (NX_FIELDS-1) * NY_FIELDS * pml5) + i * NY_FIELDS * pml5 + j * pml5 + k1;
+                float phi = zmHPhi2[p_idx];
+                Hy[id4] -= upd * (RA01 * dEx + RB0 * phi);
+                zmHPhi2[p_idx] = RE0 * phi - RF0 * dEx;
+            }
+        }
 
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dEy, dEz;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// int total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// int total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// int total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = xf - (i1 + 1);
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,i1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,i1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,i1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,i1,NY_R)];
-
-        long long m = 0; // 目前你还是只有一层，就写0，将来可以改
-        RA01 = R[INDEX3D_R(0,m,i1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i1,1,NY_R)];      // RF
-        // Hy
-        dEz = (Ez[INDEX4D_FIELDS(p1,ii+1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ez[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-
-        Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        // Subscripts for field arrays
-        ii = xf - (i2 + 1);
-        jj = j2 + ys;
-        kk = k2 + zs;
-        long long m=0;
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,i2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,i2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,i2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,i2,NY_R)];
-        RA01 = R[INDEX3D_R(0,m,i2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i2,1,NY_R)];      // RF
-        // Hz
-
-        dEy = (Ey[INDEX4D_FIELDS(p2,ii+1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-
-        Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEy + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEy;
-
-
-        // printf("(%d %d %d %d) \n",p2,i2,j2,k2);
-
-    }
-}
-
-
-
-
-__global__ void xmH(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,   float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,   float* __restrict__ Hx,  float *Hy,  float *Hz,  float *PHI1,  float *PHI2,   const float* __restrict__ R,  float d,float *updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
-
-
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-     float RA01, RB0, RE0, RF0, dEy, dEz;
-     float dx = d;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i1,1,NY_R)];      // RF
-        // Hy
-         
-        dEz = (Ez[INDEX4D_FIELDS(p1,ii+1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ez[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-        Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i2,1,NY_R)];      // RF
-        // Hz
-         
-        dEy = (Ey[INDEX4D_FIELDS(p2,ii+1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-        Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEy + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEy;
+        id4 += field_stride;
     }
 }
 
-
-
-
-
-__global__ void y0H(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,    float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,  float* __restrict__ Hx,   float* __restrict__ Hy,  float* __restrict__ Hz,  float *PHI1,  float *PHI2,  const float* __restrict__ R,  float d,float* __restrict__ updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
-
-    
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-     float RA01, RB0, RE0, RF0, dEx, dEz;
-     float dy = d;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = yf - (j1 + 1);
-        kk = k1 + zs;
-        // printf("(%d %d %d %d) \n",p1,ii,jj,kk);
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j1,1,NY_R)];      // RF
-        // Hx
-         
-        dEz = (Ez[INDEX4D_FIELDS(p1,ii,jj+1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ez[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        ii = i2 + xs;
-        jj = yf - (j2 + 1);
-        kk = k2 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j2,1,NY_R)];      // RF
-        // Hz
-         
-        dEx = (Ex[INDEX4D_FIELDS(p2,ii,jj+1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ex[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEx;
-    }
-}
-
-
-
-
-__global__ void ymH(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,  float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,  float* __restrict__ Hx,   float* __restrict__ Hy,  float* __restrict__ Hz,  float *PHI1,  float *PHI2, const float* __restrict__ R,  float d, float* __restrict__ updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
-
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-     float RA01, RB0, RE0, RF0, dEx, dEz;
-     float dy = d;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j1,1,NY_R)];      // RF
-        // Hx
-         
-        dEz = (Ez[INDEX4D_FIELDS(p1,ii,jj+1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ez[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j2,1,NY_R)];      // RF
-        // Hz
-         
-        dEx = (Ex[INDEX4D_FIELDS(p2,ii,jj+1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ex[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hz[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEx;
-    }
-}
-
-
-
-
-
-__global__ void z0H(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,    float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,  float *Hx,  float *Hy,   float* __restrict__ Hz,  float *PHI1,  float *PHI2,  const float* __restrict__ R,  float d,float *updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
-
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-     float RA01, RB0, RE0, RF0, dEx, dEy;
-     float dz = d;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// long long total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// long long total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// long long total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = zf - (k1 + 1);
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k1,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k1,1,NY_R)];      // RF
-        // Hx
-         
-        dEy = (Ey[INDEX4D_FIELDS(p1,ii,jj,kk+1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEy + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEy;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = zf - (k2 + 1);
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k2,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k2,1,NY_R)];      // RF
-        // Hy
-         
-        dEx = (Ex[INDEX4D_FIELDS(p2,ii,jj,kk+1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ex[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEx;
-    }
-}
-
-
-__global__ void zmH(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,    float* __restrict__ Ex,   float* __restrict__ Ey,   float* __restrict__ Ez,  float *Hx,  float *Hy,   float* __restrict__ Hz,  float *PHI1,  float *PHI2,  const float* __restrict__ R,  float d,float *updatecoeffsH, int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,int step) {
-
-
-    // Obtain the linear index corresponding to the current tREad
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-     float RA01, RB0, RE0, RF0, dEx, dEy;
-     float dz = d;
-    long long ii, jj, kk;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// long long total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// long long total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// long long total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k1,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k1,1,NY_R)];      // RF
-        // Hx
-         
-        dEy = (Ey[INDEX4D_FIELDS(p1,ii,jj,kk+1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hx[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEy + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dEy;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-      // printf("1");
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k2,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k2,1,NY_R)];      // RF
-        // Hy
-         
-        dEx = (Ex[INDEX4D_FIELDS(p2,ii,jj,kk+1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Ex[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsH[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dEx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dEx;
-    }
-}
-
-
-
-
-__global__ void x0E(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1,
-int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,  float* __restrict__ Ex, float *Ey, float *Ez,  float* __restrict__ Hx,
-float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float *updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-    
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHy, dHz;
-    float dx = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// int total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// int total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// int total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = xf - i1;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,i1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,i1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,i1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,i1,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i1,1,NY_R)];      // RF
-        // Ey
-
-        dHz = (Hz[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hz[INDEX4D_FIELDS(p1,ii-1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-        Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-
-        // Subscripts for field arrays
-        ii = xf - i2;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,i2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,i2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,i2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,i2,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i2,1,NY_R)];      // RF
-        // Ez
-          
-        dHy = (Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hy[INDEX4D_FIELDS(p2,ii-1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-        Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHy + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHy;
-    }
-}
-
-
-
-
-
-
-__global__ void xmE(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R,  float* __restrict__ Ex, float *Ey, float *Ez,  float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float *updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-
-
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHy, dHz;
-    float dx = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i1,1,NY_R)];      // RF
-        // Ey
-
-        dHz = (Hz[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hz[INDEX4D_FIELDS(p1,ii-1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-
-        Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ey[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,i2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,i2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,i2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,i2,1,NY_R)];      // RF
-        // Ez
-          
-        dHy = (Hy[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hy[INDEX4D_FIELDS(p2,ii-1,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dx;
-
-        Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHy + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHy;
-    }
-}
-
-
-
-__global__ void y0E(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R, float *Ex,  float* __restrict__ Ey, float *Ez,  float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float* __restrict__ updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHx, dHz;
-    float dy = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = yf - j1;
-        kk = k1 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j1,1,NY_R)];      // RF
-        // Ex
-
-        dHz = (Hz[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hz[INDEX4D_FIELDS(p1,ii,jj-1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-
-        Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-
-        ii = i2 + xs;
-        jj = yf - j2;
-        kk = k2 + zs;
-        
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j2,1,NY_R)];      // RF
-        // Ez
-          
-        dHx = (Hx[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hx[INDEX4D_FIELDS(p2,ii,jj-1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHx;
-    }
-}
-
-
-
-__global__ void ymE(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R, float *Ex,  float* __restrict__ Ey, float *Ez,  float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float *updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHx, dHz;
-    float dy = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// int total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// int total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// int total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,j1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,j1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,j1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,j1,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j1,1,NY_R)];      // RF
-        // Ex
-
-        dHz = (Hz[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hz[INDEX4D_FIELDS(p1,ii,jj-1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-
-        Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHz + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHz;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,j2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,j2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,j2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,j2,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,j2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,j2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,j2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,j2,1,NY_R)];      // RF
-        // Ez
-          
-        dHx = (Hx[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hx[INDEX4D_FIELDS(p2,ii,jj-1,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dy;
-        Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ez[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHx;
-    }
-}
-
-
-
-
-__global__ void z0E(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R, float *Ex, float *Ey,  float* __restrict__ Ez,  float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float *updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHx, dHy;
-    float dz = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-// long long total1 = step * NX_PHI1 * NY_PHI1 * NZ_PHI1;
-// int total2 = step * NX_PHI2 * NY_PHI2 * NZ_PHI2;
-// int total  = max(total1, total2);
-// if (idx >= total) return;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = zf - k1;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k1,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k1,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k1,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k1,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k1,1,NY_R)];      // RF
-        // Ex
-
-        dHy = (Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hy[INDEX4D_FIELDS(p1,ii,jj,kk-1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-
-        Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHy + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHy;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = zf - k2;
-
-        // PML coefficients
-        // RA01 = RA[INDEX2D_R(0,k2,NY_R)] - 1;
-        // RB0 = RB[INDEX2D_R(0,k2,NY_R)];
-        // RE0 = RE[INDEX2D_R(0,k2,NY_R)];
-        // RF0 = RF[INDEX2D_R(0,k2,NY_R)];
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k2,1,NY_R)];      // RF
-        // Ey
-        dHx = (Hx[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hx[INDEX4D_FIELDS(p2,ii,jj,kk-1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHx;
-    }
-}
-
-
-__global__ void zmE(int xs, int xf, int ys, int yf, int zs, int zf, int NX_PHI1, int NY_PHI1, int NZ_PHI1, int NX_PHI2, int NY_PHI2, int NZ_PHI2, int NY_R, float *Ex, float *Ey,  float* __restrict__ Ez,  float* __restrict__ Hx,  float* __restrict__ Hy,  float* __restrict__ Hz, float *PHI1, float *PHI2, const float* __restrict__ R, float d,float *updatecoeffsE, int NX_FIELDS, int NY_FIELDS,  int NZ_FIELDS,int step) {
-
-
-    // Obtain the linear index corresponding to the current thread
-    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Convert the linear index to subscripts for PML PHI1 (4D) arrays
-    long long p1 = idx / (NX_PHI1 * NY_PHI1 * NZ_PHI1);
-    long long i1 = (idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) / (NY_PHI1 * NZ_PHI1);
-    long long j1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) / NZ_PHI1;
-    long long k1 = ((idx % (NX_PHI1 * NY_PHI1 * NZ_PHI1)) % (NY_PHI1 * NZ_PHI1)) % NZ_PHI1;
-
-    // Convert the linear index to subscripts for PML PHI2 (4D) arrays
-    long long p2 = idx / (NX_PHI2 * NY_PHI2 * NZ_PHI2);
-    long long i2 = (idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) / (NY_PHI2 * NZ_PHI2);
-    long long j2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) / NZ_PHI2;
-    long long k2 = ((idx % (NX_PHI2 * NY_PHI2 * NZ_PHI2)) % (NY_PHI2 * NZ_PHI2)) % NZ_PHI2;
-
-    float RA01, RB0, RE0, RF0, dHx, dHy;
-    float dz = d;
-    long long ii, jj, kk ;
-    long long nx = xf - xs;
-    long long ny = yf - ys;
-    long long nz = zf - zs;
-    if (p1 <step && i1 < nx && j1 < ny && k1 < nz) {
-        // Subscripts for field arrays
-        ii = i1 + xs;
-        jj = j1 + ys;
-        kk = k1 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k1,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k1,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k1,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k1,1,NY_R)];      // RF
-        // Ex
-
-        dHy = (Hy[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hy[INDEX4D_FIELDS(p1,ii,jj,kk-1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-
-        Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ex[INDEX4D_FIELDS(p1,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHy + RB0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)]);
-        PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] = RE0 * PHI1[INDEX4D_PHI1(p1,i1,j1,k1,NX_PHI1,NY_PHI1,NZ_PHI1)] - RF0 * dHy;
-    }
-
-    if (p2 <step && i2 < nx && j2 < ny && k2 < nz) {
-
-        // Subscripts for field arrays
-        ii = i2 + xs;
-        jj = j2 + ys;
-        kk = k2 + zs;
-
-        long long m = 0; 
-        RA01 = R[INDEX3D_R(0,m,k2,1,NY_R)] - 1;  // RA
-        RB0  = R[INDEX3D_R(1,m,k2,1,NY_R)];      // RB
-        RE0  = R[INDEX3D_R(2,m,k2,1,NY_R)];      // RE
-        RF0  = R[INDEX3D_R(3,m,k2,1,NY_R)];      // RF
-        // Ey
-
-        dHx = (Hx[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] - Hx[INDEX4D_FIELDS(p2,ii,jj,kk-1,NX_FIELDS,NY_FIELDS,NZ_FIELDS)]) / dz;
-        Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] = Ey[INDEX4D_FIELDS(p2,ii,jj,kk,NX_FIELDS,NY_FIELDS,NZ_FIELDS)] + updatecoeffsE[INDEX3D_FIELDS(ii,jj,kk,NY_FIELDS,NZ_FIELDS)] * (RA01 * dHx + RB0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)]);
-        PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] = RE0 * PHI2[INDEX4D_PHI2(p2,i2,j2,k2,NX_PHI2,NY_PHI2,NZ_PHI2)] - RF0 * dHx;
-    }
-}
-
-
-
+// ---------------------------------------------------------
+// 反传：波场倒播
+// ---------------------------------------------------------
 __global__ void Back_source(
     int step, int iteration, float dx,
-    const int* __restrict__ sourcelocation,
-    const float* __restrict__ srcwaveforms,
+    const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
     float* Ex, float* Ey, float* Ez, float* uE4,
     int NX, int NY, int NZ, int nsr, int polarisation, int iterations
 ){
-    long long tid = blockIdx.x * blockDim.x + threadIdx.x;   // 一维全局索引
-    if (tid >= step * nsr) return;
+    long long src = blockIdx.x * blockDim.x + threadIdx.x;   
+    if (src >= nsr) return;
+    long long field_stride = (long long)NX * NY * NZ;
+    long long index_stride = (long long)iterations * nsr;
+    long long index = (long long)iteration * nsr + src;
 
-    // 由tid反推原来的(s, src)
-    long long s   = tid / nsr;   // step 维度
-    long long src = tid % nsr;   // 源维度
+    for (int s = 0; s < step; ++s) {
+        long long i = sourcelocation[s * nsr * 3 + src * 3 + 0];
+        long long j = sourcelocation[s * nsr * 3 + src * 3 + 1];
+        long long k = sourcelocation[s * nsr * 3 + src * 3 + 2];
 
-    // 计算源波形索引
-    long long index = s * (iterations * nsr) + iteration * nsr + src;
+        float waveform_value = srcwaveforms[index];
+        long long id4 = s * field_stride + i * NY * NZ + j * NZ + k;
 
-    // 获取源位置 (i, j, k)
-    long long i = sourcelocation[s * nsr * 3 + src * 3 + 0];
-    long long j = sourcelocation[s * nsr * 3 + src * 3 + 1];
-    long long k = sourcelocation[s * nsr * 3 + src * 3 + 2];
+        if (polarisation == 0) Ex[id4] -= waveform_value;
+        else if (polarisation == 1) Ey[id4] -= waveform_value;
+        else if (polarisation == 2) Ez[id4] -= waveform_value;
 
-    float waveform_value = srcwaveforms[index];
-
-    // 调试打印（需要时保留）
-    // printf("%d %d %d %d %.10lf\n", s, i, j, src, waveform_value);
-
-    // 根据极化方向注入
-    if (polarisation == 0) {
-        Ex[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= waveform_value;
-    } else if (polarisation == 1) {
-        Ey[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= waveform_value;
-    } else if (polarisation == 2) {
-        Ez[INDEX4D_FIELDS(s, i, j, k, NX, NY, NZ)] -= waveform_value;
+        index += index_stride;
     }
 }
 
-
-
-
-#include <cfloat>
-
-__global__ void check_nan_inf6_print(
-    const float* Ex, const float* Ey, const float* Ez,
-    const float* Hx, const float* Hy, const float* Hz,
-    int NX, int NY, int NZ, int NZ1)
-{
-    long long total = NX * NY * NZ;
-
-    if (blockIdx.x == 0 && threadIdx.x == 0) {
-        float max_val = -FLT_MAX;
-        float min_val =  FLT_MAX;
-
-        for (long long idx = 0; idx < total; idx++) {
-            float ex = Ex[idx], ey = Ey[idx], ez = Ez[idx];
-            float hx = Hx[idx], hy = Hy[idx], hz = Hz[idx];
-
-            // 检查 NaN/Inf
-            // if (!isfinite(ex)) printf("NaN/Inf %d in Ex[%d]: %f\n", NZ1, idx, ex);
-            // if (!isfinite(ey)) printf("NaN/Inf %d in Ey[%d]: %f\n", NZ1, idx, ey);
-            // if (!isfinite(ez)) printf("NaN/Inf %d in Ez[%d]: %f\n", NZ1, idx, ez);
-            // if (!isfinite(hx)) printf("NaN/Inf %d in Hx[%d]: %f\n", NZ1, idx, hx);
-            // if (!isfinite(hy)) printf("NaN/Inf %d in Hy[%d]: %f\n", NZ1, idx, hy);
-            // if (!isfinite(hz)) printf("NaN/Inf %d in Hz[%d]: %f\n", NZ1, idx, hz);
-
-            // 逐个更新最大最小
-            max_val = fmaxf(max_val, ex);
-            max_val = fmaxf(max_val, ey);
-            max_val = fmaxf(max_val, ez);
-            max_val = fmaxf(max_val, hx);
-            max_val = fmaxf(max_val, hy);
-            max_val = fmaxf(max_val, hz);
-
-            min_val = fminf(min_val, ex);
-            min_val = fminf(min_val, ey);
-            min_val = fminf(min_val, ez);
-            min_val = fminf(min_val, hx);
-            min_val = fminf(min_val, hy);
-            min_val = fminf(min_val, hz);
-        }
-
-        // printf("Step %d : Global min = %e , Global max = %e\n",
-        //        NZ1, min_val, max_val);
-    }
-}
-
-
+// ---------------------------------------------------------
+// 提取快照到缓冲区或全局内存
+// ---------------------------------------------------------
 __global__ void copy_to_Eall_single(
-    float* __restrict__ Eall,   // [nt, step, NX-1, NY-1, NZ-1]
-    int t,                      // 当前的时间索引 (1 ~ nt-1)
-    const float* __restrict__ E, 
+    float* __restrict__ dst_ptr, int t_idx, const float* __restrict__ E, 
     int step, int NX, int NY, int NZ)
 {
-    // 内部网格大小
-    const long long nx1 = NX - 1;
-    const long long ny1 = NY - 1;
-    const long long nz1 = NZ - 1;
-    const unsigned long long  total = (unsigned long long)step * nx1 * ny1 * nz1;
+    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long long nx1 = NX - 1, ny1 = NY - 1, nz1 = NZ - 1;
+    long long total = nx1 * ny1 * nz1;
+    if (idx >= total) return;
 
-    unsigned long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < total) {
+    long long i = idx / (ny1 * nz1);
+    long long rem = idx % (ny1 * nz1);
+    long long j = rem / nz1;
+    long long k = rem % nz1;
 
+    long long src_idx = i * NY * NZ + j * NZ + k;
+    long long dst_idx = (long long)t_idx * step * total + idx; 
+    long long field_stride = (long long)NX * NY * NZ;
 
-        // 展开 idx -> [s, i, j, k]
-        long long s   = idx / (nx1 * ny1 * nz1);
-        long long rem = idx % (nx1 * ny1 * nz1);
-        long long i   = rem / (ny1 * nz1);
-        long long j   = (rem % (ny1 * nz1)) / nz1;
-        long long k   = rem % nz1;
-
-    if (s < 0 || s >= step || i >= NX-1 || j >= NY-1 || k >= NZ-1) {
-        // printf("Index error: s=%d i=%d j=%d k=%d\n", s, i, j, k);
-        return;}
-
-        // 在原始 E (step,NX,NY,NZ) 中取内部点
-        unsigned long long src_idx = ((unsigned long long)s * NX * NY * NZ)
-                    + i * NY * NZ
-                    + j * NZ
-                    + k;
-
-        // 目标 Eall(nt, step, NX-1, NY-1, NZ-1) 的线性索引
-        unsigned long long dst_idx = ((unsigned long long)(t * step + s) * (nx1 * ny1 * nz1))
-                       + i * (ny1 * nz1)
-                       + j * nz1
-                       + k;
-
-        // 拷贝单个分量
-        Eall[dst_idx] = E[src_idx];
-
+    for (int s = 0; s < step; ++s) {
+        dst_ptr[dst_idx] = E[src_idx];
+        src_idx += field_stride;
+        dst_idx += total;
     }
 }
 
-
-
-__global__ void accumulate_gradients_1d_safe(
-    const float* __restrict__ Ez,
-    const float* __restrict__ Eall,
-    float* __restrict__ grader,
-    float* __restrict__ gradse,
-    int i, int step, int NX, int NY, int NZ, float dt,int errequiregrad,int serequiregrad
+// ---------------------------------------------------------
+// 融合：伴随状态法梯度更新（支持降采样波场及异步滑窗/同步显存自适应）
+// ---------------------------------------------------------
+__global__ void accumulate_gradients(
+    const float* __restrict__ Ez, const float* __restrict__ Eall_ptr, const float* __restrict__ d_E_buf,
+    float* __restrict__ grader, float* __restrict__ gradse,
+    int i, int step, int NX, int NY, int NZ, float dt,int errequiregrad,int serequiregrad,
+    int S, int nt_saved, int use_async_offload
 ) {
+    long long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long long sx = (NX - 1), sy = (NY - 1), sz = (NZ - 1);
+    long long total_cells = sx * sy * sz;
 
-    long long tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_cells) return;
 
-    long long sx = (NX - 1);
-    long long sy = (NY - 1);
-    long long sz = (NZ - 1);
+    long long ix = idx / (sy * sz);
+    long long rem = idx % (sy * sz);
+    long long iy = rem / sz;
+    long long iz = rem % sz;
 
-    long long per_step = sx * sy * sz;
-    unsigned long long total_threads = step * per_step;
+    long long idx_Ez = ix * NY * NZ + iy * NZ + iz;
+    
+    // 逻辑时刻索引
+    long long idx0_curr = i / S;
+    long long idx1_curr = min(idx0_curr + 1, (long long)nt_saved - 1);
+    float w1_curr = (float)(i % S) / S;
+    float w0_curr = 1.0f - w1_curr;
 
-    if (tid >= total_threads) return;
+    long long idx0_prev = (i - 1) / S;
+    long long idx1_prev = min(idx0_prev + 1, (long long)nt_saved - 1);
+    float w1_prev = (float)((i - 1) % S) / S;
+    float w0_prev = 1.0f - w1_prev;
 
-    unsigned long long tmp = tid;
-    long long iz = (tmp % sz); tmp /= sz;
-    long long iy = (tmp % sy); tmp /= sy;
-    long long ix = (tmp % sx); tmp /= sx;
-    long long s  = tmp;
-    // printf("%d %d %d %d\n",s,ix,iy,iz);
-    long long idx = ix * sy * sz + iy * sz + iz;
+    long long ez_stride = (long long)NX * NY * NZ;
+    float local_grader = 0.0f;
+    float local_gradse = 0.0f;
 
-    long long idx_Ez = s * NX * NY * NZ
-                + ix * NY * NZ
-                + iy * NZ
-                + iz;
+    for (int s = 0; s < step; ++s) {
+        long long base_idx = (long long)s * total_cells + idx;
+        float e0_c, e1_c, e0_p, e1_p;
 
-    unsigned long long idx_curr = i * step*per_step + s * per_step + idx;
-    unsigned long long idx_prev = (i-1) * step*per_step + s * per_step + idx;
-    if (errequiregrad==1)
-        {atomicAdd(&grader[idx], (Eall[idx_curr] - Eall[idx_prev]) * Ez[idx_Ez]/dt);}
-    if (serequiregrad==1)
-        {atomicAdd(&gradse[idx], Eall[idx_curr]* Ez[idx_Ez]*dt);}
+        if (use_async_offload) {
+            e0_c = d_E_buf[(idx0_curr % 3) * step * total_cells + base_idx];
+            e1_c = d_E_buf[(idx1_curr % 3) * step * total_cells + base_idx];
+            e0_p = d_E_buf[(idx0_prev % 3) * step * total_cells + base_idx];
+            e1_p = d_E_buf[(idx1_prev % 3) * step * total_cells + base_idx];
+        } else {
+            e0_c = Eall_ptr[idx0_curr * step * total_cells + base_idx];
+            e1_c = Eall_ptr[idx1_curr * step * total_cells + base_idx];
+            e0_p = Eall_ptr[idx0_prev * step * total_cells + base_idx];
+            e1_p = Eall_ptr[idx1_prev * step * total_cells + base_idx];
+        }
 
+        float e_curr = e0_c * w0_curr + e1_c * w1_curr;
+        float e_prev = e0_p * w0_prev + e1_p * w1_prev;
+
+        float ez_val = Ez[idx_Ez];
+
+        if (errequiregrad == 1) local_grader += (e_curr - e_prev) * ez_val / dt;
+        if (serequiregrad == 1) local_gradse += e_curr * ez_val * dt;
+
+        idx_Ez += ez_stride;
+    }
+
+    if (errequiregrad == 1) atomicAdd(&grader[idx], local_grader);
+    if (serequiregrad == 1) atomicAdd(&gradse[idx], local_gradse);
 }
 
-
-
-
-
+// ---------------------------------------------------------
+// 主机 API
+// ---------------------------------------------------------
 extern "C" {
 
-
-void forward(const float* __restrict__ er, const float* __restrict__ se,
-             const float* __restrict__ mr,  
-             float* __restrict__ Eall,
-             float* __restrict__ Ex,  float* __restrict__ Ey,
-             float* __restrict__ Ez,  float* __restrict__ Hx,
-             float* __restrict__ Hy,  float* __restrict__ Hz,
-             
+void forward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,  
+             float* __restrict__ Eall_ptr, 
+             float* __restrict__ Ex,  float* __restrict__ Ey, float* __restrict__ Ez,  
+             float* __restrict__ Hx, float* __restrict__ Hy,  float* __restrict__ Hz,
              float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
              float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
 
-            float* __restrict__ x0EPhi1,float* __restrict__ x0EPhi2,
-            float* __restrict__ x0HPhi1,float* __restrict__ x0HPhi2,
-            float* __restrict__ xmEPhi1,float* __restrict__ xmEPhi2,
-            float* __restrict__ xmHPhi1,float* __restrict__ xmHPhi2,
-            float* __restrict__ y0EPhi1,float* __restrict__ y0EPhi2,
-            float* __restrict__ y0HPhi1,float* __restrict__ y0HPhi2,
-            float* __restrict__ ymEPhi1,float* __restrict__ ymEPhi2,
-            float* __restrict__ ymHPhi1,float* __restrict__ ymHPhi2,
-            float* __restrict__ z0EPhi1,float* __restrict__ z0EPhi2,
-            float* __restrict__ z0HPhi1,float* __restrict__ z0HPhi2,
-            float* __restrict__ zmEPhi1,float* __restrict__ zmEPhi2,
-            float* __restrict__ zmHPhi1,float* __restrict__ zmHPhi2,
+            float* __restrict__ x0EPhi1,float* __restrict__ x0EPhi2, float* __restrict__ x0HPhi1,float* __restrict__ x0HPhi2,
+            float* __restrict__ xmEPhi1,float* __restrict__ xmEPhi2, float* __restrict__ xmHPhi1,float* __restrict__ xmHPhi2,
+            float* __restrict__ y0EPhi1,float* __restrict__ y0EPhi2, float* __restrict__ y0HPhi1,float* __restrict__ y0HPhi2,
+            float* __restrict__ ymEPhi1,float* __restrict__ ymEPhi2, float* __restrict__ ymHPhi1,float* __restrict__ ymHPhi2,
+            float* __restrict__ z0EPhi1,float* __restrict__ z0EPhi2, float* __restrict__ z0HPhi1,float* __restrict__ z0HPhi2,
+            float* __restrict__ zmEPhi1,float* __restrict__ zmEPhi2, float* __restrict__ zmHPhi1,float* __restrict__ zmHPhi2,
 
             int pml0,int pml1,int pml2,int pml3,int pml4,int pml5,
 
-            const float* __restrict__ x0ER,const float* __restrict__ xmER,
-            const float* __restrict__ y0ER,const float* __restrict__ ymER,
-            const float* __restrict__ z0ER,const float* __restrict__ zmER,
-            const float* __restrict__ x0HR,const float* __restrict__ xmHR,
-            const float* __restrict__ y0HR,const float* __restrict__ ymHR,
-            const float* __restrict__ z0HR,const float* __restrict__ zmHR,
+            const float* __restrict__ x0ER,const float* __restrict__ xmER, const float* __restrict__ y0ER,const float* __restrict__ ymER,
+            const float* __restrict__ z0ER,const float* __restrict__ zmER, const float* __restrict__ x0HR,const float* __restrict__ xmHR,
+            const float* __restrict__ y0HR,const float* __restrict__ ymHR, const float* __restrict__ z0HR,const float* __restrict__ zmHR,
 
              float dt, int nt, int step, int nrx, float dx,
              const int* __restrict__ receiverlocation, float* __restrict__ rxs, 
 
              int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS, int nsrc, 
-             const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
-             int polarisation
-)
+             const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms, int polarisation,
+             int sampling_interval) 
 {
+    cudaPointerAttributes attr;
+    cudaError_t err = cudaPointerGetAttributes(&attr, Eall_ptr);
+    int use_async = 0;
+    if (err == cudaSuccess && attr.type == cudaMemoryTypeDevice) {
+        use_async = 0; 
+    } else {
+        cudaGetLastError(); 
+        use_async = 1; 
+    }
+
+    float* d_E_buf = nullptr;
+    long long snap_size = (long long)step * (NX_FIELDS - 1) * (NY_FIELDS - 1) * (NZ_FIELDS - 1);
+    
+    cudaStream_t stream_comp = 0, stream_trans = 0;
+    cudaEvent_t event_comp;
+    if (use_async) {
+        cudaStreamCreate(&stream_comp);
+        cudaStreamCreate(&stream_trans);
+        cudaEventCreate(&event_comp);
+        cudaMalloc(&d_E_buf, 2 * snap_size * sizeof(float)); 
+    }
+
     long long blockSize = 256;
+    long long total_fields = (long long)NX_FIELDS * NY_FIELDS * NZ_FIELDS;
+    dim3 grid_fields(CEIL_DIV(total_fields, blockSize));
 
-    long long total_ucget = NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    dim3 grid_ucget(CEIL_DIV(total_ucget, blockSize));
-    ucgetforward<<<grid_ucget, blockSize>>>(
-            er, se, mr, 
-            uE0, uE1, uE4,
-            uH0, uH1, uH4,
-            NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt, dx
-            );
-            cudaDeviceSynchronize();   
-    
-
-     
-    long long total_x0H = step * pml0 * NY_FIELDS * (NZ_FIELDS );
-    dim3 grid_x0H(CEIL_DIV(total_x0H, blockSize));
-    long long total_xmH = step * pml1 * NY_FIELDS * (NZ_FIELDS );
-    dim3 grid_xmH(CEIL_DIV(total_xmH, blockSize));
-
-    long long total_y0H = step * NX_FIELDS * pml2 * (NZ_FIELDS );
-    dim3 grid_y0H(CEIL_DIV(total_y0H, blockSize));
-    long long total_ymH = step * NX_FIELDS * pml3 * (NZ_FIELDS );
-    dim3 grid_ymH(CEIL_DIV(total_ymH, blockSize));
-
-    long long total_z0H = step * NX_FIELDS * (NY_FIELDS ) * pml4;
-    dim3 grid_z0H(CEIL_DIV(total_z0H, blockSize));
-    long long total_zmH = step * NX_FIELDS * (NY_FIELDS ) * pml5;
-    dim3 grid_zmH(CEIL_DIV(total_zmH, blockSize));
-
-    long long total_x0E = step * (pml0+1) * (NY_FIELDS) * (NZ_FIELDS);
-    dim3 grid_x0E(CEIL_DIV(total_x0E, blockSize));
-    long long total_xmE = step * (pml1+1) * (NY_FIELDS) * (NZ_FIELDS);
-    dim3 grid_xmE(CEIL_DIV(total_xmE, blockSize));
-
-    long long total_y0E = step * NX_FIELDS * (pml2+1) * (NZ_FIELDS);
-    dim3 grid_y0E(CEIL_DIV(total_y0E, blockSize));
-    long long total_ymE = step * NX_FIELDS * (pml3+1) * (NZ_FIELDS);
-    dim3 grid_ymE(CEIL_DIV(total_ymE, blockSize));
-
-    long long total_z0E = step * NX_FIELDS * (NY_FIELDS) * (pml4+1);
-    dim3 grid_z0E(CEIL_DIV(total_z0E, blockSize));
-    long long total_zmE = step * NX_FIELDS * (NY_FIELDS) * (pml5+1);
-    dim3 grid_zmE(CEIL_DIV(total_zmE, blockSize));
+    ucgetforward<<<grid_fields, blockSize, 0, stream_comp>>>(er, se, mr, uE0, uE1, uE4, uH0, uH1, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt, dx);
   
+    dim3 grid_rx(CEIL_DIV(nrx, blockSize));
+    dim3 grid_src(CEIL_DIV(nsrc, blockSize));
+    long long total_copy = (long long)(NX_FIELDS - 1) * (NY_FIELDS - 1) * (NZ_FIELDS - 1); 
+    dim3 grid_copy(CEIL_DIV(total_copy, blockSize));
 
+    for (int i = 0; i < nt; i++) {
+        long long rx_total = step * nrx;
+        long long gridSize_rx = (rx_total + blockSize - 1) / blockSize;
+        store_outputs<<<gridSize_rx, blockSize, 0, stream_comp>>>(step, nrx, i, receiverlocation, rxs, Ex, Ey, Ez, Hx, Hy, Hz, NX_FIELDS, NY_FIELDS, NZ_FIELDS, nt);
 
-    for (int i = 0; i < nt; i++)
-    {
+        fused_h_fields_updates_gpu<<<grid_fields, blockSize, 0, stream_comp>>>(
+            uH0, uH1, Ex, Ey, Ez, Hx, Hy, Hz, dx, dx, dx, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS,
+            pml0, pml1, pml2, pml3, pml4, pml5, x0HR, xmHR, y0HR, ymHR, z0HR, zmHR, uH4, 
+            x0HPhi1, x0HPhi2, xmHPhi1, xmHPhi2, y0HPhi1, y0HPhi2, ymHPhi1, ymHPhi2, z0HPhi1, z0HPhi2, zmHPhi1, zmHPhi2);
 
-    // {   // 检测代码块
-    //     int total = NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    //     dim3 grid((total + 255) / 256);
-    //     check_nan_inf6_print<<<grid, 256>>>(Ex,Ey,Ez,Hx,Hy,Hz,NX_FIELDS,NY_FIELDS,NZ_FIELDS,i);
-    //     cudaDeviceSynchronize();
-    // }
-        // printf("Forward step %d / %d \n", i+1, nt);
-        {
-            long long total = step * nrx;
-            long long blockSize = 256;
-            long long gridSize  = (total + blockSize - 1) / blockSize;
-            // printf("%d %d %d %d \n",step, nrx, i, nt);
-            store_outputs<<<gridSize, blockSize>>>(
-                    step, nrx, i,
-                    receiverlocation,
-                    rxs,
-                    Ex, Ey, Ez,
-                    Hx, Hy, Hz,
-                    NX_FIELDS, NY_FIELDS, NZ_FIELDS, nt
-                                );
-            cudaDeviceSynchronize();CUDA_CHECK();
-        }
+        fused_e_fields_updates_gpu<<<grid_fields, blockSize, 0, stream_comp>>>(
+            uE0, uE1, Ex, Ey, Ez, Hx, Hy, Hz, dx, dx, dx, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS,
+            pml0, pml1, pml2, pml3, pml4, pml5, x0ER, xmER, y0ER, ymER, z0ER, zmER, uE4,
+            x0EPhi1, x0EPhi2, xmEPhi1, xmEPhi2, y0EPhi1, y0EPhi2, ymEPhi1, ymEPhi2, z0EPhi1, z0EPhi2, zmEPhi1, zmEPhi2);
 
-        {        
-            long long total_h = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-            dim3 grid_h(CEIL_DIV(total_h, blockSize));
-            h_fields_updates_gpu<<<grid_h, blockSize>>>(
-                    uH0, uH1,      
-                    Ex, Ey, Ez,   
-                    Hx, Hy, Hz,
-                    step,  NX_FIELDS,  NY_FIELDS,  NZ_FIELDS
-                );
-            cudaDeviceSynchronize();CUDA_CHECK();
-        } 
-
-        {        
-
-        if (pml0>0)
-            {x0H<<<grid_x0H, blockSize>>>(0,pml0,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml0, NY_FIELDS, NZ_FIELDS-1,
-                pml0, NY_FIELDS-1, NZ_FIELDS,
-                pml0,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                x0HPhi1,x0HPhi2,
-                x0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            cudaDeviceSynchronize();CUDA_CHECK();
-            }
-        } 
-
-        {        
-
-        if (pml1>0)
-            {xmH<<<grid_xmH, blockSize>>>(NX_FIELDS-1-pml1,NX_FIELDS-1,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml1, NY_FIELDS, NZ_FIELDS-1,
-                pml1, NY_FIELDS-1, NZ_FIELDS,
-                pml1,
-                Ex,Ey,Ez,Hx,Hy,Hz, 
-                xmHPhi1,xmHPhi2,
-                xmHR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            cudaDeviceSynchronize();CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml2>0)
-            {y0H<<<grid_y0H, blockSize>>>(
-                 0,NX_FIELDS-1,0,pml2,0,NZ_FIELDS-1,
-                NX_FIELDS, pml2, NZ_FIELDS-1,
-                NX_FIELDS-1, pml2, NZ_FIELDS,
-                pml2,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                y0HPhi1,y0HPhi2,
-                y0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            cudaDeviceSynchronize();CUDA_CHECK();
-            }
-        } 
-    
-        {        
-        if (pml3>0)
-            {ymH<<<grid_ymH, blockSize>>>(
-                0,NX_FIELDS-1,NY_FIELDS-1-pml3,NY_FIELDS-1,0,NZ_FIELDS-1,
-                NX_FIELDS, pml3, NZ_FIELDS-1,
-                NX_FIELDS-1, pml3, NZ_FIELDS,
-                pml3,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                ymHPhi1,ymHPhi2,
-                ymHR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            cudaDeviceSynchronize();CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml4>0)
-            {z0H<<<grid_z0H, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,0,pml4,
-                NX_FIELDS, NY_FIELDS-1, pml4,
-                NX_FIELDS-1, NY_FIELDS, pml4,
-                pml4,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                z0HPhi1,z0HPhi2,
-                z0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            cudaDeviceSynchronize();CUDA_CHECK();  
-            }
-        } 
-        // printf("%d %d %d %d\n",NX_FIELDS-1,NY_FIELDS-1,NZ_FIELDS-1-pml5,NZ_FIELDS-1); 
+        Update_hertzian_dipole<<<grid_src, blockSize, 0, stream_comp>>>(step, i, dx, sourcelocation, srcwaveforms, Ex, Ey, Ez, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, nsrc, polarisation, nt);
         
-        {        
-        if (pml5>0)
-            {zmH<<<grid_zmH, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,NZ_FIELDS-1-pml5,NZ_FIELDS-1,
-            NX_FIELDS, NY_FIELDS-1, pml5,
-            NX_FIELDS-1, NY_FIELDS, pml5,
-            pml5,
-            Ex,Ey,Ez,Hx,Hy,Hz,
-            zmHPhi1,zmHPhi2,
-            zmHR,
-            dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-        cudaDeviceSynchronize();  
-        CUDA_CHECK();
-        } 
-
-        {               
-
-            size_t total_e = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-            dim3 grid_e(CEIL_DIV(total_e, blockSize));
-            e_fields_updates_gpu<<<grid_e, blockSize>>>(uE0, uE1,  
-                    Ex,  Ey, Ez,  
-                    Hx, Hy, Hz,
-                    step, NX_FIELDS, NY_FIELDS, NZ_FIELDS);
-            cudaDeviceSynchronize();CUDA_CHECK();
-        } 
-
-
-
-        {        
-         if (pml0>0)
-            {x0E<<<grid_x0E, blockSize>>>(0,pml0,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml0+1, NY_FIELDS-1, NZ_FIELDS,
-                pml0+1, NY_FIELDS, NZ_FIELDS-1,
-                pml0,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                x0EPhi1,x0EPhi2,
-                x0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            CUDA_CHECK();
+        if (i % sampling_interval == 0) {
+            int t_saved = i / sampling_interval;
+            if (use_async) {
+                int buf_idx = t_saved % 2; 
+                cudaStreamSynchronize(stream_trans);
+                copy_to_Eall_single<<<grid_copy, blockSize, 0, stream_comp>>>(d_E_buf, buf_idx, Ez, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS);
+                cudaEventRecord(event_comp, stream_comp);
+                cudaStreamWaitEvent(stream_trans, event_comp, 0);
+                cudaMemcpyAsync(Eall_ptr + t_saved * snap_size, d_E_buf + buf_idx * snap_size, snap_size * sizeof(float), cudaMemcpyDeviceToHost, stream_trans);
+            } else {
+                copy_to_Eall_single<<<grid_copy, blockSize, 0, stream_comp>>>(Eall_ptr, t_saved, Ez, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS);
             }
-        } 
-
-        {        
-        if (pml1>0)
-            {xmE<<<grid_xmE, blockSize>>>(NX_FIELDS-1-pml1,NX_FIELDS-1,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml1+1, NY_FIELDS-1, NZ_FIELDS,
-                pml1+1, NY_FIELDS, NZ_FIELDS-1,
-                pml1,
-                Ex,Ey,Ez,Hx,Hy,Hz, 
-                xmEPhi1,xmEPhi2,
-                xmER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-                CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml2>0)
-            {y0E<<<grid_y0E, blockSize>>>(
-                 0,NX_FIELDS-1,0,pml2,0,NZ_FIELDS-1,
-                NX_FIELDS-1, pml2+1, NZ_FIELDS,
-                NX_FIELDS, pml2+1, NZ_FIELDS-1,
-                pml2,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                y0EPhi1,y0EPhi2,
-                y0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml3>0)
-            {ymE<<<grid_ymE, blockSize>>>(
-                0,NX_FIELDS-1,NY_FIELDS-1-pml3,NY_FIELDS-1,0,NZ_FIELDS-1,
-                NX_FIELDS-1, pml3+1, NZ_FIELDS,
-                NX_FIELDS, pml3+1, NZ_FIELDS-1,
-                pml3,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                ymEPhi1,ymEPhi2,
-                ymER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-                CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml4>0)
-            {z0E<<<grid_z0E, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,0,pml4,
-                NX_FIELDS-1, NY_FIELDS, pml4+1,
-                NX_FIELDS, NY_FIELDS-1, pml4+1,
-                pml4,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                z0EPhi1,z0EPhi2,
-                z0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            CUDA_CHECK();
-            }
-        } 
-
-        {        
-        if (pml5>0)
-            {zmE<<<grid_zmE, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,NZ_FIELDS-1-pml5,NZ_FIELDS-1,
-            NX_FIELDS-1, NY_FIELDS, pml5+1,
-            NX_FIELDS, NY_FIELDS-1, pml5+1,
-            pml5,
-            Ex,Ey,Ez,Hx,Hy,Hz,
-            zmEPhi1,zmEPhi2,
-            zmER,
-            dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-        cudaDeviceSynchronize(); CUDA_CHECK();
-        } 
-
-        {
-
-        int bx = 64;
-        int by = 16;
-        dim3 block_src(bx, by);
-        dim3 grid_src( (nsrc + bx - 1) / bx, (step + by - 1) / by );
-        Update_hertzian_dipole<<<grid_src, block_src>>>(
-            step, i, dx,
-            sourcelocation, srcwaveforms,
-            Ex, Ey, Ez, uE4,
-            NX_FIELDS, NY_FIELDS, NZ_FIELDS, nsrc, polarisation, nt);
-        cudaDeviceSynchronize();CUDA_CHECK();
-
         }
-        
-        {
-   
-            size_t total_copy = step * (NX_FIELDS - 1) * (NY_FIELDS - 1) * (NZ_FIELDS - 1);
-            dim3 grid_copy((total_copy + blockSize - 1) / blockSize);
+    }
 
-            copy_to_Eall_single<<<grid_copy, blockSize>>>(
-                Eall, i,
-                Ez,
-                step, NX_FIELDS, NY_FIELDS, NZ_FIELDS);
-            cudaDeviceSynchronize();CUDA_CHECK();
-        }
+    if (use_async) {
+        // 【核心修复】：必须先等流里的所有任务彻底做完，才能把底下的显存 free 掉！
+        cudaStreamSynchronize(stream_comp);
+        cudaStreamSynchronize(stream_trans);
+        cudaFree(d_E_buf); 
+        cudaEventDestroy(event_comp);
+        cudaStreamDestroy(stream_comp);
+        cudaStreamDestroy(stream_trans);
     }
 }
 
-
-
-
-
-void backward(const float* __restrict__ er, const float* __restrict__ se,
-             const float* __restrict__ mr,  
-             const float* __restrict__ Eall,
-             float* __restrict__ Ex,  float* __restrict__ Ey,
-             float* __restrict__ Ez,  float* __restrict__ Hx,
-             float* __restrict__ Hy,  float* __restrict__ Hz,
-             
+void backward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,  
+             const float* __restrict__ Eall_ptr,
+             float* __restrict__ Ex,  float* __restrict__ Ey, float* __restrict__ Ez,  
+             float* __restrict__ Hx, float* __restrict__ Hy,  float* __restrict__ Hz,
              float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
              float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
 
-            float* __restrict__ x0EPhi1,float* __restrict__ x0EPhi2,
-            float* __restrict__ x0HPhi1,float* __restrict__ x0HPhi2,
-            float* __restrict__ xmEPhi1,float* __restrict__ xmEPhi2,
-            float* __restrict__ xmHPhi1,float* __restrict__ xmHPhi2,
-            float* __restrict__ y0EPhi1,float* __restrict__ y0EPhi2,
-            float* __restrict__ y0HPhi1,float* __restrict__ y0HPhi2,
-            float* __restrict__ ymEPhi1,float* __restrict__ ymEPhi2,
-            float* __restrict__ ymHPhi1,float* __restrict__ ymHPhi2,
-            float* __restrict__ z0EPhi1,float* __restrict__ z0EPhi2,
-            float* __restrict__ z0HPhi1,float* __restrict__ z0HPhi2,
-            float* __restrict__ zmEPhi1,float* __restrict__ zmEPhi2,
-            float* __restrict__ zmHPhi1,float* __restrict__ zmHPhi2,
+            float* __restrict__ x0EPhi1,float* __restrict__ x0EPhi2, float* __restrict__ x0HPhi1,float* __restrict__ x0HPhi2,
+            float* __restrict__ xmEPhi1,float* __restrict__ xmEPhi2, float* __restrict__ xmHPhi1,float* __restrict__ xmHPhi2,
+            float* __restrict__ y0EPhi1,float* __restrict__ y0EPhi2, float* __restrict__ y0HPhi1,float* __restrict__ y0HPhi2,
+            float* __restrict__ ymEPhi1,float* __restrict__ ymEPhi2, float* __restrict__ ymHPhi1,float* __restrict__ ymHPhi2,
+            float* __restrict__ z0EPhi1,float* __restrict__ z0EPhi2, float* __restrict__ z0HPhi1,float* __restrict__ z0HPhi2,
+            float* __restrict__ zmEPhi1,float* __restrict__ zmEPhi2, float* __restrict__ zmHPhi1,float* __restrict__ zmHPhi2,
 
             int pml0,int pml1,int pml2,int pml3,int pml4,int pml5,
 
-            float* __restrict__ x0ER,float* __restrict__ xmER,
-            float* __restrict__ y0ER,float* __restrict__ ymER,
-            float* __restrict__ z0ER,float* __restrict__ zmER,
-            float* __restrict__ x0HR,float* __restrict__ xmHR,
-            float* __restrict__ y0HR,float* __restrict__ ymHR,
-            float* __restrict__ z0HR,float* __restrict__ zmHR,
+            float* __restrict__ x0ER,float* __restrict__ xmER, float* __restrict__ y0ER,float* __restrict__ ymER,
+            float* __restrict__ z0ER,float* __restrict__ zmER, float* __restrict__ x0HR,float* __restrict__ xmHR,
+            float* __restrict__ y0HR,float* __restrict__ ymHR, float* __restrict__ z0HR,float* __restrict__ zmHR,
 
              float dt, int nt, int step, int nrx, float dx,
              int NX_FIELDS, int NY_FIELDS, int NZ_FIELDS,
              int nsrc, const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
              int polarisation, 
-             float*__restrict__ grad_er,float*__restrict__ grad_se, int  errequiregrad, int  serequiregrad
-)
+             float*__restrict__ grad_er,float*__restrict__ grad_se, int errequiregrad, int serequiregrad,
+             int sampling_interval) 
 {
-    int blockSize = 256;
+    cudaPointerAttributes attr;
+    cudaError_t err = cudaPointerGetAttributes(&attr, Eall_ptr);
+    int use_async = 0;
+    if (err == cudaSuccess && attr.type == cudaMemoryTypeDevice) {
+        use_async = 0;
+    } else {
+        cudaGetLastError(); 
+        use_async = 1;
+    }
 
-    int total_ucget = NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-    dim3 grid_ucget(CEIL_DIV(total_ucget, blockSize));
-    ucgetbackward<<<grid_ucget, blockSize>>>(
-            er, se, mr, 
-            uE0, uE1, uE4,
-            uH0, uH1, uH4,
-            NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt, dx
-            );
-            cudaDeviceSynchronize();   
-    CUDA_CHECK();
+    float* d_E_buf = nullptr;
+    long long snap_size = (long long)step * (NX_FIELDS - 1) * (NY_FIELDS - 1) * (NZ_FIELDS - 1);
+    
+    cudaStream_t stream_comp = 0, stream_trans = 0;
+    cudaEvent_t event_trans;
+    if (use_async) {
+        cudaStreamCreate(&stream_comp);
+        cudaStreamCreate(&stream_trans);
+        cudaEventCreate(&event_trans);
+        cudaMalloc(&d_E_buf, 3 * snap_size * sizeof(float)); 
+    }
 
-     
-    int total_x0H = step * pml0 * NY_FIELDS * (NZ_FIELDS );
-    dim3 grid_x0H(CEIL_DIV(total_x0H, blockSize));
-    int total_xmH = step * pml1 * NY_FIELDS * (NZ_FIELDS );
-    dim3 grid_xmH(CEIL_DIV(total_xmH, blockSize));
+    long long blockSize = 256;
+    long long total_fields = (long long)NX_FIELDS * NY_FIELDS * NZ_FIELDS;
+    dim3 grid_fields(CEIL_DIV(total_fields, blockSize));
 
-    int total_y0H = step * NX_FIELDS * pml2 * (NZ_FIELDS);
-    dim3 grid_y0H(CEIL_DIV(total_y0H, blockSize));
-    int total_ymH = step * NX_FIELDS * pml3 * (NZ_FIELDS );
-    dim3 grid_ymH(CEIL_DIV(total_ymH, blockSize));
+    ucgetbackward<<<grid_fields, blockSize, 0, stream_comp>>>(er, se, mr, uE0, uE1, uE4, uH0, uH1, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt, dx);
 
-    int total_z0H = step * NX_FIELDS * (NY_FIELDS ) * pml4;
-    dim3 grid_z0H(CEIL_DIV(total_z0H, blockSize));
-    int total_zmH = step * NX_FIELDS * (NY_FIELDS ) * pml5;
-    dim3 grid_zmH(CEIL_DIV(total_zmH, blockSize));
+    long long total_src = step * nsrc;                           
+    long long src_blocks = (total_src + blockSize - 1) / blockSize;        
+    dim3 grid_src(src_blocks);
 
-    int total_x0E = step * (pml0+1) * (NY_FIELDS) * (NZ_FIELDS);
-    dim3 grid_x0E(CEIL_DIV(total_x0E, blockSize));
-    int total_xmE = step * (pml1+1) * (NY_FIELDS) * (NZ_FIELDS);
-    dim3 grid_xmE(CEIL_DIV(total_xmE, blockSize));
-
-    int total_y0E = step * NX_FIELDS * (pml2+1) * (NZ_FIELDS);
-    dim3 grid_y0E(CEIL_DIV(total_y0E, blockSize));
-    int total_ymE = step * NX_FIELDS * (pml3+1) * (NZ_FIELDS);
-    dim3 grid_ymE(CEIL_DIV(total_ymE, blockSize));
-
-    int total_z0E = step * NX_FIELDS * (NY_FIELDS) * (pml4+1);
-    dim3 grid_z0E(CEIL_DIV(total_z0E, blockSize));
-    int total_zmE = step * NX_FIELDS * (NY_FIELDS) * (pml5+1);
-    dim3 grid_zmE(CEIL_DIV(total_zmE, blockSize));
+    long long total_grad = (long long)(NX_FIELDS-1) * (NY_FIELDS-1) * (NZ_FIELDS-1);
+    dim3 grid_grad(CEIL_DIV(total_grad, blockSize));
   
+    int nt_saved = (nt + sampling_interval - 1) / sampling_interval;
 
+    int max_t_needed = (nt - 1) / sampling_interval;
+    max_t_needed = min(max_t_needed + 1, nt_saved - 1);
+    int lowest_t_loaded = max_t_needed - 2;
 
-    for (int i = nt-1; i >0; i--)
-    {
-
-        {
-            int threads = 256;                                   // 每个block的线程数，可根据硬件调节
-            int total   = step * nsrc;                           // 总元素数
-            int blocks  = (total + threads - 1) / threads;        // gridDim.x
-
-            Back_source<<<blocks, threads>>>(
-                step, i, dx,
-                sourcelocation, srcwaveforms,
-                Ex, Ey, Ez, uE4,
-                NX_FIELDS, NY_FIELDS, NZ_FIELDS,
-                nsrc, polarisation, nt
-            );
-            cudaDeviceSynchronize();
-            CUDA_CHECK();
-        }
-        {               
-            size_t total_h = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-            dim3 grid_h(CEIL_DIV(total_h, blockSize));
-            e_fields_updates_gpu<<<grid_h, blockSize>>>(uE0, uE1,  
-                    Ex,  Ey, Ez,  
-                    Hx, Hy, Hz,
-                    step, NX_FIELDS, NY_FIELDS, NZ_FIELDS);
-            cudaDeviceSynchronize();CUDA_CHECK();
-        } 
-
-        {        
-         if (pml0>0)
-            {x0E<<<grid_x0E, blockSize>>>(0,pml0,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml0+1, NY_FIELDS-1, NZ_FIELDS,
-                pml0+1, NY_FIELDS, NZ_FIELDS-1,
-                pml0,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                x0EPhi1,x0EPhi2,
-                x0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}CUDA_CHECK();
-        } 
-
-        {        
-        if (pml1>0)
-            {xmE<<<grid_xmE, blockSize>>>(NX_FIELDS-1-pml1,NX_FIELDS-1,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml1+1, NY_FIELDS-1, NZ_FIELDS,
-                pml1+1, NY_FIELDS, NZ_FIELDS-1,
-                pml1,
-                Ex,Ey,Ez,Hx,Hy,Hz, 
-                xmEPhi1,xmEPhi2,
-                xmER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-                CUDA_CHECK();
-        } 
-
-        {        
-        if (pml2>0)
-            {y0E<<<grid_y0E, blockSize>>>(
-                 0,NX_FIELDS-1,0,pml2,0,NZ_FIELDS-1,
-                NX_FIELDS-1, pml2+1, NZ_FIELDS,
-                NX_FIELDS, pml2+1, NZ_FIELDS-1,
-                pml2,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                y0EPhi1,y0EPhi2,
-                y0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}CUDA_CHECK();
-        } 
-
-        {        
-        if (pml3>0)
-            {ymE<<<grid_ymE, blockSize>>>(
-                0,NX_FIELDS-1,NY_FIELDS-1-pml3,NY_FIELDS-1,0,NZ_FIELDS-1,
-                NX_FIELDS-1, pml3+1, NZ_FIELDS,
-                NX_FIELDS, pml3+1, NZ_FIELDS-1,
-                pml3,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                ymEPhi1,ymEPhi2,
-                ymER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}CUDA_CHECK();
-        } 
-
-        {        
-        if (pml4>0)
-            {z0E<<<grid_z0E, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,0,pml4,
-                NX_FIELDS-1, NY_FIELDS, pml4+1,
-                NX_FIELDS, NY_FIELDS-1, pml4+1,
-                pml4,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                z0EPhi1,z0EPhi2,
-                z0ER,
-                dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}CUDA_CHECK();
-        } 
-
-        {        
-        if (pml5>0)
-            {zmE<<<grid_zmE, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,NZ_FIELDS-1-pml5,NZ_FIELDS-1,
-            NX_FIELDS-1, NY_FIELDS, pml5+1,
-            NX_FIELDS, NY_FIELDS-1, pml5+1,
-            pml5,
-            Ex,Ey,Ez,Hx,Hy,Hz,
-            zmEPhi1,zmEPhi2,
-            zmER,
-            dx, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-        
-        } 
-        cudaDeviceSynchronize(); CUDA_CHECK();
-
-        {        
-            size_t total_h = step * NX_FIELDS * NY_FIELDS * NZ_FIELDS;
-            dim3 grid_h(CEIL_DIV(total_h, blockSize));
-            h_fields_updates_gpu<<<grid_h, blockSize>>>(
-                    uH0, uH1,      
-                    Ex, Ey, Ez,   
-                    Hx, Hy, Hz,
-                    step,  NX_FIELDS,  NY_FIELDS,  NZ_FIELDS
-                );
-            cudaDeviceSynchronize();CUDA_CHECK();
-        } 
-
-        {        
-
-        if (pml0>0)
-            {x0H<<<grid_x0H, blockSize>>>(0,pml0,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml0, NY_FIELDS, NZ_FIELDS-1,
-                pml0, NY_FIELDS-1, NZ_FIELDS,
-                pml0,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                x0HPhi1,x0HPhi2,
-                x0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);
-            
+    if (use_async) {
+        for(int k = 0; k < 3; k++) {
+            int t_load = max_t_needed - k;
+            if(t_load >= 0) {
+                cudaMemcpyAsync(d_E_buf + (t_load % 3) * snap_size, Eall_ptr + t_load * snap_size, snap_size * sizeof(float), cudaMemcpyHostToDevice, stream_trans);
             }
-            CUDA_CHECK();
-        } 
-
-        {        
-
-        if (pml1>0)
-            {xmH<<<grid_xmH, blockSize>>>(NX_FIELDS-1-pml1,NX_FIELDS-1,0,NY_FIELDS-1,0,NZ_FIELDS-1,
-                pml1, NY_FIELDS, NZ_FIELDS-1,
-                pml1, NY_FIELDS-1, NZ_FIELDS,
-                pml1,
-                Ex,Ey,Ez,Hx,Hy,Hz, 
-                xmHPhi1,xmHPhi2,
-                xmHR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-                CUDA_CHECK();
-        } 
-
-        {        
-        if (pml2>0)
-            {y0H<<<grid_y0H, blockSize>>>(
-                 0,NX_FIELDS-1,0,pml2,0,NZ_FIELDS-1,
-                NX_FIELDS, pml2, NZ_FIELDS-1,
-                NX_FIELDS-1, pml2, NZ_FIELDS,
-                pml2,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                y0HPhi1,y0HPhi2,
-                y0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-                CUDA_CHECK();
-        } 
-
-        {        
-        if (pml3>0)
-            {ymH<<<grid_ymH, blockSize>>>(
-                0,NX_FIELDS-1,NY_FIELDS-1-pml3,NY_FIELDS-1,0,NZ_FIELDS-1,
-                NX_FIELDS, pml3, NZ_FIELDS-1,
-                NX_FIELDS-1, pml3, NZ_FIELDS,
-                pml3,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                ymHPhi1,ymHPhi2,
-                ymHR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-                CUDA_CHECK();
-        } 
-
-        {        
-        if (pml4>0)
-            {z0H<<<grid_z0H, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,0,pml4,
-                NX_FIELDS, NY_FIELDS-1, pml4,
-                NX_FIELDS-1, NY_FIELDS, pml4,
-                pml4,
-                Ex,Ey,Ez,Hx,Hy,Hz,
-                z0HPhi1,z0HPhi2,
-                z0HR,
-                dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-                CUDA_CHECK();
-        } 
-
-        {        
-        if (pml5>0)
-            {zmH<<<grid_zmH, blockSize>>>(0,NX_FIELDS-1,0,NY_FIELDS-1,NZ_FIELDS-1-pml5,NZ_FIELDS-1,
-            NX_FIELDS, NY_FIELDS-1, pml5,
-            NX_FIELDS-1, NY_FIELDS, pml5,
-            pml5,
-            Ex,Ey,Ez,Hx,Hy,Hz,
-            zmHPhi1,zmHPhi2,
-            zmHR,
-            dx, uH4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, step);}
-        
-        } 
-        cudaDeviceSynchronize();  
-        CUDA_CHECK();
-
-        {
-            int total_threads = step * (NX_FIELDS-1) * (NY_FIELDS-1) * (NZ_FIELDS-1);
-            int numBlocks = (total_threads + blockSize - 1) / blockSize;
-
-            accumulate_gradients_1d_safe<<<numBlocks, blockSize>>>(
-                Ez, Eall, grad_er, grad_se, i, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt,errequiregrad,serequiregrad
-            );
-            cudaDeviceSynchronize();  
-            CUDA_CHECK();
         }
-        
+        cudaStreamSynchronize(stream_trans);
+    }
 
+    for (int i = nt-1; i > 0; i--) {
+        if (use_async) {
+            int needed_t_min = (i - 1) / sampling_interval;
+            if (needed_t_min < lowest_t_loaded && needed_t_min >= 0) {
+                cudaStreamSynchronize(stream_trans); 
+                cudaMemcpyAsync(d_E_buf + (needed_t_min % 3) * snap_size, Eall_ptr + needed_t_min * snap_size, snap_size * sizeof(float), cudaMemcpyHostToDevice, stream_trans);
+                lowest_t_loaded = needed_t_min;
+            }
+            cudaEventRecord(event_trans, stream_trans);
+            cudaStreamWaitEvent(stream_comp, event_trans, 0);
+        }
+
+        Back_source<<<grid_src, blockSize, 0, stream_comp>>>(step, i, dx, sourcelocation, srcwaveforms, Ex, Ey, Ez, uE4, NX_FIELDS, NY_FIELDS, NZ_FIELDS, nsrc, polarisation, nt);
+        
+        fused_e_fields_updates_gpu<<<grid_fields, blockSize, 0, stream_comp>>>(
+            uE0, uE1, Ex, Ey, Ez, Hx, Hy, Hz, dx, dx, dx, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS,
+            pml0, pml1, pml2, pml3, pml4, pml5, x0ER, xmER, y0ER, ymER, z0ER, zmER, uE4,
+            x0EPhi1, x0EPhi2, xmEPhi1, xmEPhi2, y0EPhi1, y0EPhi2, ymEPhi1, ymEPhi2, z0EPhi1, z0EPhi2, zmEPhi1, zmEPhi2);
+
+        fused_h_fields_updates_gpu<<<grid_fields, blockSize, 0, stream_comp>>>(
+            uH0, uH1, Ex, Ey, Ez, Hx, Hy, Hz, dx, dx, dx, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS,
+            pml0, pml1, pml2, pml3, pml4, pml5, x0HR, xmHR, y0HR, ymHR, z0HR, zmHR, uH4, 
+            x0HPhi1, x0HPhi2, xmHPhi1, xmHPhi2, y0HPhi1, y0HPhi2, ymHPhi1, ymHPhi2, z0HPhi1, z0HPhi2, zmHPhi1, zmHPhi2);
+
+        accumulate_gradients<<<grid_grad, blockSize, 0, stream_comp>>>(Ez, Eall_ptr, d_E_buf, grad_er, grad_se, i, step, NX_FIELDS, NY_FIELDS, NZ_FIELDS, dt, errequiregrad, serequiregrad, sampling_interval, nt_saved, use_async);
+    }
+
+    if (use_async) {
+        // 【核心修复】：必须先同步！
+        cudaStreamSynchronize(stream_comp);
+        cudaStreamSynchronize(stream_trans);
+        cudaFree(d_E_buf); 
+        cudaEventDestroy(event_trans);
+        cudaStreamDestroy(stream_comp);
+        cudaStreamDestroy(stream_trans);
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
-
-
-
-
-
-

@@ -1,6 +1,6 @@
 import torch
 import ctypes
-from . import lib
+from . import c_lib
 from .common import initialization,build_pml_phi,create_or_separate,buildpmlcoeffs,check_tensors_for_nan_inf
 
 def compute(device, dx=None, dt=None, 
@@ -75,7 +75,7 @@ class DeepGPR(torch.autograd.Function):
 
         receiver_amplitudes = torch.zeros((nstep, 6, nt, nrx),device=device).contiguous()  
 
-        lib.forward(
+        c_lib.forward(
                 ctypes.cast(ere.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(see.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(mr.data_ptr(), ctypes.POINTER(ctypes.c_float)),
@@ -241,7 +241,7 @@ class DeepGPR(torch.autograd.Function):
             grad_se=torch.empty(0)
             serequiregrad=0
 
-        lib.backward(
+        c_lib.backward(
                 ctypes.cast(ere.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(see.data_ptr(), ctypes.POINTER(ctypes.c_float)), 
                 ctypes.cast(mr.data_ptr(), ctypes.POINTER(ctypes.c_float)),

@@ -172,7 +172,7 @@ def pmlthick_revert(p, er):
 
 class TVRegularization(nn.Module):
     # tv_criterion = TVRegularization(weight_ep=1,weight_sigma=0.1).to(device)
-    def __init__(self, weight_ep=1, weight_sigma=0.1, method='anisotropic'):
+    def __init__(self, weight_ep=1, weight_sigma=0.001, method='anisotropic'):
         super(TVRegularization, self).__init__()
         self.weight_ep = weight_ep
         self.weight_sigma = weight_sigma

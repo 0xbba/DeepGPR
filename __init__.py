@@ -4,7 +4,7 @@ import subprocess
 import platform
 from pathlib import Path
 
-# 1. 检测当前操作系统，并配置对应的扩展名和 nvcc 编译命令
+
 system_name = platform.system()
 lib_dir = Path(__file__).parent / 'lib'
 cu_file = lib_dir / 'deepgpr.cu'
@@ -47,12 +47,12 @@ if not lib_path_obj.is_file():
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Compilation failed with error code {e.returncode}.")
 
-# 3. 加载编译好的动态链接库
+# 3. 加载编译好的动态链接库 (变量名改为 c_lib，避免与 lib 文件夹冲突)
 lib_path = str(lib_path_obj)
-lib = ctypes.cdll.LoadLibrary(lib_path)
+c_lib = ctypes.cdll.LoadLibrary(lib_path)
 
 # 4. 定义 C 函数的参数和返回值类型
-lib.forward.argtypes = [
+c_lib.forward.argtypes = [
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), 
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), 
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
@@ -90,11 +90,11 @@ lib.forward.argtypes = [
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, 
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
-    ctypes.c_int ]
+    ctypes.c_int 
+]
+c_lib.forward.restype = None  # 修复了绑定错误
 
-lib.restype = None
-
-lib.backward.argtypes = [
+c_lib.backward.argtypes = [
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), 
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), 
     ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
@@ -132,8 +132,16 @@ lib.backward.argtypes = [
     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, 
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
     ctypes.c_int ,ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
-    ctypes.c_int, ctypes.c_int ]
+    ctypes.c_int, ctypes.c_int 
+]
+c_lib.backward.restype = None  # 修复了绑定错误
 
-lib.restype = None
+__all__ = ['c_lib']
 
-__all__ = ['lib']
+# ==============================================================================
+# 第二步：在动态库环境就绪后再导入其余模块
+# ==============================================================================
+from .common import *
+from .compute2 import *
+from .multiscale import *
+from .visual import *

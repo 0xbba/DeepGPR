@@ -69,6 +69,6 @@ ax[1].set_title("Gradient")
 plt.show()
 ```
 
-![result](./Fig/example2.png)
+![result](./Fig/example.png)
 
 There are more examples in the ./examples.

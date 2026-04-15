@@ -49,7 +49,6 @@ peak_time = 1 / freq
 source_amplitudes = torch.zeros((1,nt,1),device=device)
 source_amplitudes[0,:,0]=DeepGPR.ricker(freq, nt, dt, peak_time).to(device)
 
-DeepGPR.plot_survey_geometry(er,source_location, receiver_location,dx)
 
 #forward modeling
 r = DeepGPR.compute(
@@ -69,7 +68,6 @@ ax[1].imshow(er.grad.detach())
 ax[1].set_title("Gradient")
 plt.show()
 ```
-![result](./Fig/example1.png)
 
 ![result](./Fig/example2.png)
 

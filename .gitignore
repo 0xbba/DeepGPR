@@ -1,2 +1,7 @@
 lib/deepgpr.so
 __pycache__/
+dist/
+build/
+.vscode/
+*.egg-info/
+pyproject.toml

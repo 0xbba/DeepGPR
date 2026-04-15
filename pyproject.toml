@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DeepGPR" 
-version = "0.0.2"              
+version = "0.0.4"              
 authors = [
   { name="Lei Liu", email="liulei990222@gmail.com" },
 ]
@@ -13,12 +13,13 @@ readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Operating System :: Microsoft :: Windows"
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux"
 ]
 
-[tool.setuptools]
-packages = ["DeepGPR"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.package-data]
 "DeepGPR" = ["lib/*.cu", "lib/*.so", "lib/*.dll"]

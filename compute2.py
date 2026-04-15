@@ -60,7 +60,6 @@ class DeepGPR(torch.autograd.Function):
 
         nt_saved = (nt + model_gradient_sampling_interval - 1) // model_gradient_sampling_interval
         
-        # 仅仅控制显存分配策略，无需修改 C 端参数签名
         if use_async_offload:
             Eall = torch.zeros((nt_saved, nstep, nx, ny, nz), device='cpu', dtype=dtype).pin_memory()
         else:
@@ -307,7 +306,6 @@ class DeepGPR(torch.autograd.Function):
         ctx.Eall = None
         del Eall,er, se, mr,receiver_location,x0,xm,y0,ym,z0,zm,x01,x02,xm1,xm2,y01,y02,ym1,ym2,z01,z02,zm1,zm2,ere,see, Eupdatecoffs0, Eupdatecoffs1, Eupdatecoffs4, Hupdatecoffs0, Hupdatecoffs1, Hupdatecoffs4
 
-        # 返回与前向传播参数一一对应（最后补齐 use_async_offload 占位）
         return (
                     grad_er, grad_se,         
                     gEx,gEy,gEz, gHx,gHy,gHz, 

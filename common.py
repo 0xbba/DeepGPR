@@ -5,37 +5,7 @@ import math
 from scipy.constants import c
 from scipy.constants import mu_0 as m0
 from scipy.constants import epsilon_0 as e0
-from typing import Optional
 
-def ricker(
-    freq: float,
-    length: int,
-    dt: float,
-    peak_time: float,
-    dtype: Optional[torch.dtype] = None,
-) -> torch.Tensor:
-    """Return a Ricker wavelet with the specified central frequency.
-
-    Args:
-        freq: The central frequency.
-        length: The number of time samples.
-        dt: The time sample spacing.
-        peak_time: The time (in secs) of the peak amplitude.
-        dtype: The PyTorch datatype to use. Optional, defaults to PyTorch's
-            default (float32).
-    Returns:
-        A PyTorch tensor representing the Ricker wavelet.
-    """
-    if dt == 0:
-        raise ValueError("dt cannot be zero.")
-
-    t: torch.Tensor = torch.arange(float(length), dtype=dtype) * dt - peak_time
-    y: torch.Tensor = (1 - 2 * math.pi**2 * freq**2 * t**2) * torch.exp(
-        -(math.pi**2) * freq**2 * t**2,
-    )
-    if dtype is not None:
-        return y.to(dtype)
-    return y
 
 def initialization(device, er,se,mr,source_amplitudes,source_location,receiver_location,dx,dt,pmlthick):
     dtype=torch.float32
@@ -150,7 +120,7 @@ def check_cfl(dx, dt, nx,ny,nz):
 
 
 def pmlthick_revert(p, er):
-    if isinstance(p, int):  # 如果是 int
+    if isinstance(p, int):  
         if er.shape[2] == 1:
             return torch.tensor([p, p, p, p, 0, 0], dtype=torch.int32)
         return torch.tensor([p]*6, dtype=torch.int32)
@@ -310,7 +280,7 @@ def check_tensors_for_nan_inf(d,**tensors):
 
         if has_nan or has_inf:
             found_issue = True
-            print(f"❌ [ERROR]{d}: Tensor `{name}` contains:", end=" ")
+            print(f"[ERROR]{d}: Tensor `{name}` contains:", end=" ")
             if has_nan:
                 print("NaN ", end="")
             if has_inf:
@@ -594,50 +564,3 @@ def checkpoint_initial_field(device=None,per_nstep=None, dx=None, dt=None,
 
 def zero_field(*tensors):
     return tuple(torch.zeros_like(t) if t is not None else None for t in tensors)
-
-def print_field_shapes(E, H, PML):
-    """
-    打印 FDTD 场变量的形状
-    E: (Ex, Ey, Ez)
-    H: (Hx, Hy, Hz)
-    PML: 包含 24 个 Phi 张量的元组
-    """
-    print("="*30)
-    print(" FIELD SHAPES CHECK ")
-    print("="*30)
-    
-    # 1. 检查电场 E
-    e_names = ['Ex', 'Ey', 'Ez']
-    for name, tensor in zip(e_names, E):
-        shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
-        print(f"{name:10} : {shape}")
-    
-    print("-" * 20)
-    
-    # 2. 检查磁场 H
-    h_names = ['Hx', 'Hy', 'Hz']
-    for name, tensor in zip(h_names, H):
-        shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
-        print(f"{name:10} : {shape}")
-    
-    print("-" * 20)
-    
-    # 3. 检查 PML 场
-    pml_names = [
-        "x0EPhi1", "x0EPhi2", "x0HPhi1", "x0HPhi2",
-        "xmEPhi1", "xmEPhi2", "xmHPhi1", "xmHPhi2",
-        "y0EPhi1", "y0EPhi2", "y0HPhi1", "y0HPhi2",
-        "ymEPhi1", "ymEPhi2", "ymHPhi1", "ymHPhi2",
-        "z0EPhi1", "z0EPhi2", "z0HPhi1", "z0HPhi2",
-        "zmEPhi1", "zmEPhi2", "zmHPhi1", "zmHPhi2"
-    ]
-    
-    for i, name in enumerate(pml_names):
-        if i < len(PML):
-            tensor = PML[i]
-            shape = tensor.shape if torch.is_tensor(tensor) else "Not a Tensor"
-            print(f"{name:10} : {shape}")
-        else:
-            print(f"{name:10} : Missing in PML tuple")
-            
-    print("="*30)

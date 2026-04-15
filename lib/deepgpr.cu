@@ -17,9 +17,6 @@ __constant__ float m0 = 1.25663706212e-06;
     }\
 }
 
-// ---------------------------------------------------------
-// 系数获取核函数
-// ---------------------------------------------------------
 __global__ void ucgetforward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,
     float* __restrict__ uE0, float* __restrict__ uE1, float* __restrict__ uE4,
     float* __restrict__ uH0, float* __restrict__ uH1, float* __restrict__ uH4,
@@ -85,9 +82,7 @@ __global__ void ucgetbackward(const float* __restrict__ er, const float* __restr
     }
 }
 
-// ---------------------------------------------------------
-// 接收端保存
-// ---------------------------------------------------------
+
 __global__ void store_outputs(
     int step, int NRX, int iteration,
     const int* __restrict__ receiverlocation, float* __restrict__ rxs,
@@ -116,9 +111,7 @@ __global__ void store_outputs(
     }
 }
 
-// ---------------------------------------------------------
-// 震源更新
-// ---------------------------------------------------------
+
 __global__ void Update_hertzian_dipole(
     int step, int iteration, float dx, 
     const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
@@ -146,9 +139,7 @@ __global__ void Update_hertzian_dipole(
     }
 }
 
-// ---------------------------------------------------------
-// 融合：电场全局更新 + 全侧 PML 边界修正
-// ---------------------------------------------------------
+
 __global__ void fused_e_fields_updates_gpu(
     const float* __restrict__ uE0, const float* __restrict__ uE1,  
     float* __restrict__ Ex, float* __restrict__ Ey, float* __restrict__ Ez,  
@@ -317,9 +308,7 @@ __global__ void fused_e_fields_updates_gpu(
     }
 }
 
-// ---------------------------------------------------------
-// 融合：磁场全局更新 + 全侧 PML 边界修正
-// ---------------------------------------------------------
+
 __global__ void fused_h_fields_updates_gpu(
     const float* __restrict__ uH0, const float* __restrict__ uH1,
     const float* __restrict__ Ex, const float* __restrict__ Ey, const float* __restrict__ Ez,
@@ -488,9 +477,7 @@ __global__ void fused_h_fields_updates_gpu(
     }
 }
 
-// ---------------------------------------------------------
-// 反传：波场倒播
-// ---------------------------------------------------------
+
 __global__ void Back_source(
     int step, int iteration, float dx,
     const int* __restrict__ sourcelocation, const float* __restrict__ srcwaveforms,
@@ -519,9 +506,7 @@ __global__ void Back_source(
     }
 }
 
-// ---------------------------------------------------------
-// 提取快照到缓冲区或全局内存
-// ---------------------------------------------------------
+
 __global__ void copy_to_Eall_single(
     float* __restrict__ dst_ptr, int t_idx, const float* __restrict__ E, 
     int step, int NX, int NY, int NZ)
@@ -547,9 +532,7 @@ __global__ void copy_to_Eall_single(
     }
 }
 
-// ---------------------------------------------------------
-// 融合：伴随状态法梯度更新（支持降采样波场及异步滑窗/同步显存自适应）
-// ---------------------------------------------------------
+
 __global__ void accumulate_gradients(
     const float* __restrict__ Ez, const float* __restrict__ Eall_ptr, const float* __restrict__ d_E_buf,
     float* __restrict__ grader, float* __restrict__ gradse,
@@ -569,7 +552,6 @@ __global__ void accumulate_gradients(
 
     long long idx_Ez = ix * NY * NZ + iy * NZ + iz;
     
-    // 逻辑时刻索引
     long long idx0_curr = i / S;
     long long idx1_curr = min(idx0_curr + 1, (long long)nt_saved - 1);
     float w1_curr = (float)(i % S) / S;
@@ -615,9 +597,7 @@ __global__ void accumulate_gradients(
     if (serequiregrad == 1) atomicAdd(&gradse[idx], local_gradse);
 }
 
-// ---------------------------------------------------------
-// 主机 API
-// ---------------------------------------------------------
+
 extern "C" {
 
 void forward(const float* __restrict__ er, const float* __restrict__ se, const float* __restrict__ mr,  
@@ -713,7 +693,6 @@ void forward(const float* __restrict__ er, const float* __restrict__ se, const f
     }
 
     if (use_async) {
-        // 【核心修复】：必须先等流里的所有任务彻底做完，才能把底下的显存 free 掉！
         cudaStreamSynchronize(stream_comp);
         cudaStreamSynchronize(stream_trans);
         cudaFree(d_E_buf); 
@@ -829,7 +808,6 @@ void backward(const float* __restrict__ er, const float* __restrict__ se, const 
     }
 
     if (use_async) {
-        // 【核心修复】：必须先同步！
         cudaStreamSynchronize(stream_comp);
         cudaStreamSynchronize(stream_trans);
         cudaFree(d_E_buf); 

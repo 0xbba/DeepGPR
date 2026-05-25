@@ -16,6 +16,14 @@ All operations are executed on the GPU.
 Supports techniques such as checkpointing, DDP, and the utilization of CPU memory to minimize GPU memory consumption, thereby enabling the execution of large-scale models.
 
 
+## System Requirements
+
+- **OS**: Linux and Windows
+- **Environment**: Python 3.8+, CUDA Toolkit 
+- **Libraries**: `torch` (with CUDA support), `numpy`, `scipy`, `matplotlib`
+- **Hardware**: NVIDIA GPU with sufficient VRAM for 3D computational grids.
+
+
 ## Start
 
 Before use, you must ensure that you have an NVIDIA graphics card and have installed a CUDA-enabled version of PyTorch.
@@ -26,7 +34,9 @@ DeepGPR can then be installed using
   pip install DeepGPR
 ```
 
-A Small Forward Modeling Test
+
+
+## A Small Forward Modeling Test
 
 ```python
 import torch
@@ -72,3 +82,97 @@ plt.show()
 ![result](./Fig/example.png)
 
 There are more examples in the ./examples.
+
+
+
+# `compute` Interface Documentation
+
+`compute` is a core function for 3D/2D Finite-Difference Time-Domain (FDTD) forward modeling, primarily designed for Ground Penetrating Radar (GPR) and electromagnetic wave propagation. It fully supports backpropagation (e.g., for Full Waveform Inversion, FWI) utilizing PyTorch's `autograd` engine.
+
+## 📝 Function Signature
+
+```python
+def compute(device, dx=None, dt=None, 
+            source_amplitudes=None,
+            source_location=None, 
+            receiver_location=None, 
+            er=None, se=None, mr=None, 
+            E=None, H=None, PML=None,
+            pmlthick=10, source_direction=2, reciever_direction=2,
+            model_gradient_sampling_interval=1,
+            use_async_offload=False):
+```
+## 📥 Input Parameters
+### 1. Basic Physics & Grid Parameters
+
+| Parameter | Data Type | Description |
+| :--- | :--- | :--- |
+| **`device`** | `torch.device` / `str` | PyTorch computation device, e.g., `'cuda:0'`. Determines where the computation takes place. |
+| **`dx`** | `float` | Spatial grid step size (assuming an isotropic grid, i.e., $dx = dy = dz$). Typically in meters (m). |
+| **`dt`** | `float` | Time step size. **Note**: Must strictly satisfy the CFL (Courant-Friedrichs-Lewy) stability condition, or an exception will be raised. Typically in seconds (s). |
+### 2. Medium Model Parameters
+
+This section defines the electromagnetic properties of the simulation space. For 2D simulations, set `nz=1`.
+
+| Parameter | Data Type | Shape | Description |
+| :--- | :--- | :--- | :--- |
+| **`er`** | `Tensor` (float) | `(nx, ny, nz)` or `(nx, ny)` | Relative permittivity ($\epsilon_r$). Values must be $\ge 1$. |
+| **`se`** | `Tensor` (float) | `(nx, ny, nz)` or `(nx, ny)` | Electrical conductivity ($\sigma$). Values must be non-negative. |
+| **`mr`** | `Tensor` (float) | `(nx, ny, nz)` or `(nx, ny)` | Relative permeability ($\mu_r$). Optional; defaults to 1 for the entire space. Shape must match `er`. |
+
+> **Dimension Key**: `nx`, `ny`, and `nz` represent the number of grid cells along the X, Y, and Z axes, respectively. 
+
+### 3. Source & Receiver Setup
+
+This section defines the geometric observation system (coordinates) and the excitation waveforms.
+
+| Parameter | Data Type | Shape | Description |
+| :--- | :--- | :--- | :--- |
+| **`source_amplitudes`** | `Tensor` (float) | `(num_waveforms, nt)` | Source excitation waveforms. `nt` is the total number of time steps.<br>- If `num_waveforms == 1`: All sources share this single waveform.<br>- If `num_waveforms == nsr`: Each source uses its corresponding waveform. |
+| **`source_location`** | `Tensor` (int) | `(nstep, nsr, 3)` | Grid coordinate indices of the sources.<br>The last dimension corresponds to `[x_idx, y_idx, z_idx]`. |
+| **`receiver_location`** | `Tensor` (int) | `(nstep, nrx, 3)` | Grid coordinate indices of the receivers.<br>The last dimension corresponds to `[x_idx, y_idx, z_idx]`. |
+| **`source_direction`** | `int` | Scalar | Polarization direction/component of the source excitation.<br>`0` = X, `1` = Y, `2` = Z (e.g., exciting $E_z$). |
+| **`reciever_direction`** | `int` | Scalar | The component direction recorded by the receivers. (Note: typo in variable name is kept as-is to match code).<br>`0` = $E_x$, `1` = $E_y$, `2` = $E_z$. |
+
+> **Core Shape Definitions**:
+> *   `nstep`: Number of shots/batches (independent simulation tasks running in parallel).
+> *   `nsr`: Number of **sources** per single simulation.
+> *   `nrx`: Number of **receivers** per single simulation.
+> *   `nt`: Total number of time steps to simulate.
+
+### 4. Boundary Conditions & Optimization
+
+| Parameter | Data Type | Format | Description |
+| :--- | :--- | :--- | :--- |
+| **`pmlthick`** | `int` / `list` / `Tensor`| Scalar or list of 6 | Thickness (in grid layers) of the PML (Perfectly Matched Layer) absorbing boundaries.<br>- Integer `p`: All six boundaries have thickness `p` (Z-boundaries are ignored in 2D).<br>- List `[x0, xm, y0, ym, z0, zm]`: Specific thicknesses for the 6 boundaries. |
+| **`model_gradient_sampling_interval`**| `int` | Scalar | Wavefield sampling interval during forward propagation (Default: 1).<br>A larger integer reduces the VRAM usage for the saved `Eall` tensor, but may decrease the accuracy of backpropagated gradients. |
+| **`use_async_offload`** | `bool` | Scalar | VRAM optimization flag (Default: `False`).<br>If `True`, the internal full wavefield tensor (`Eall`) is asynchronously offloaded to page-locked host memory (`pin_memory` CPU RAM). This drastically reduces GPU VRAM consumption at the cost of slightly slower computation times due to PCIe data transfer latency. |
+
+### 5. Field Variable States (Checkpoints / Initial Fields)
+
+For starting a forward simulation from scratch ($t=0$), these three parameters should be passed as `None` (the system will automatically initialize zero-tensors).
+
+| Parameter | Data Type | Shape | Description |
+| :--- | :--- | :--- | :--- |
+| **`E`** | `tuple` / `None` | 3 Tensors | Initial state of the electric field components `(Ex, Ey, Ez)`. Each tensor shape is `(nstep, nx+1, ny+1, nz+1)`. |
+| **`H`** | `tuple` / `None` | 3 Tensors | Initial state of the magnetic field components `(Hx, Hy, Hz)`. Shapes identical to `E`. |
+| **`PML`** | `tuple` / `None` | 24 Tensors | Auxiliary state variables ($\Phi$ fields) for the PML boundary updates. |
+
+---
+
+## 📤 Return Values
+
+The function returns a tuple of 5 elements. These are used to extract synthetic data, initiate the gradient flow for backpropagation, or serve as initial parameters (`E`, `H`, `PML`) for subsequent time-stepped calculations.
+
+```python
+return Eall, (Ex, Ey, Ez), (Hx, Hy, Hz), (x0EPhi1...zmHPhi2), receiver_amplitudes
+```
+
+1.  **`Eall`**: The global electric field history saved for gradient calculation.
+    *   **Shape**: `(nt_saved, nstep, nx, ny, nz)` (where `nt_saved` depends on `nt` and `model_gradient_sampling_interval`).
+2.  **`(Ex, Ey, Ez)`**: The 3D electric field state at the final time step. 
+3.  **`(Hx, Hy, Hz)`**: The 3D magnetic field state at the final time step.
+4.  **`(PML_Tuple)`**: A tuple of 24 Tensors recording the final time step state of the PML auxiliary $\Phi$ variables.
+5.  **`receiver_amplitudes`**: **The core output.** The waveform signals recorded by the receivers over the entire simulation time.
+    *   **Shape**: `(nstep, nt, nrx)`
+    *   **Meaning**: `[Shot Index, Time Step, Receiver Index]`. Note that this output is already sliced to extract only the component specified by `reciever_direction`.

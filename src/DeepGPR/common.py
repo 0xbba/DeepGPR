@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from scipy.constants import c
-from scipy.constants import mu_0 as m0
-from scipy.constants import epsilon_0 as e0
 
+c = 299792458.0
+m0 = 4.0 * math.pi * 1e-7
+e0 = 1.0 / (m0 * c * c)
 
 def initialization(device, er,se,mr,source_amplitudes,source_location,receiver_location,dx,dt,pmlthick):
     dtype=torch.float32

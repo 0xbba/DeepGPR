@@ -199,7 +199,7 @@ return Eall, (Ex, Ey, Ez), (Hx, Hy, Hz), (x0EPhi1...zmHPhi2), receiver_amplitude
 
 
 # Cite information
-If you find our codes useful, please kindly cite this article.
+If you find our codes useful, please kindly cite this article. Thanks.
 
 @article{liu2026fast,
 

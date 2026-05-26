@@ -85,6 +85,26 @@ There are more examples in the ./examples.
 
 
 
+The following figures present representative 2D and 3D full-waveform inversion (FWI) examples. For each case, the true model, initial model, and inverted result are shown to evaluate the reconstruction performance of the proposed method.
+
+### 2D FWI Result
+
+The 2D example illustrates the inversion performance on a two-dimensional subsurface model. The comparison between the true model, initial model, and inverted result shows that the proposed method can effectively recover the main structural features from the initial model.
+
+| True Model | Initial Model | Inverted Result |
+|---|---|---|
+| ![2D true model](./Fig/2dfwitrue.png) | ![2D initial model](./Fig/2dfwiinit.png) | ![2D inverted result](./Fig/2dfwipred.png) |
+
+### 3D FWI Result
+
+The 3D example demonstrates the applicability of the proposed method to three-dimensional full-waveform inversion. For visualization, the figures below show the central slice of the 3D model, including the true model, the initial model, and the inverted result. The comparison indicates that the proposed method can reconstruct the dominant subsurface structures in the 3D case and improve the model consistency relative to the initial model.
+
+| Model Type | Central Slice of 3D Model |
+|---|---|
+| True Model | ![3D true model central slice](./Fig/3dfwitrue.png) |
+| Initial Model | ![3D initial model central slice](./Fig/3dfwiinit.png) |
+| Inverted Result | ![3D inverted result central slice](./Fig/3dfwipred.png) |
+
 # `compute` Interface Documentation
 
 `compute` is a core function for 3D/2D Finite-Difference Time-Domain (FDTD) forward modeling, primarily designed for Ground Penetrating Radar (GPR) and electromagnetic wave propagation. It fully supports backpropagation (e.g., for Full Waveform Inversion, FWI) utilizing PyTorch's `autograd` engine.

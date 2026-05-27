@@ -85,7 +85,7 @@ c_lib.forward.argtypes = [
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, 
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
-    ctypes.c_int 
+    ctypes.c_int, ctypes.c_int
 ]
 c_lib.forward.restype = None  
 
@@ -127,8 +127,9 @@ c_lib.backward.argtypes = [
     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, 
     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float),
     ctypes.c_int ,ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
-    ctypes.c_int, ctypes.c_int 
+    ctypes.c_int, ctypes.c_int , ctypes.c_int 
 ]
+
 c_lib.backward.restype = None 
 __all__ = ['c_lib']
 

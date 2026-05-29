@@ -1,0 +1,114 @@
+name: Build CUDA Extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        cuda: ['12.6.3']
+        python: ['3.10']
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            lib_ext: .so
+          - os: windows-latest
+            platform: windows
+            lib_ext: .dll
+
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: ${{ matrix.cuda }}
+          method: network
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Verify nvcc
+        run: nvcc --version
+
+      # ==================== Linux Build ====================
+      - name: Compile CUDA extension (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          cu_file="src/DeepGPR/lib/deepgpr.cu"
+          out_file="src/DeepGPR/lib/deepgpr.so"
+          nvcc -shared -Xcompiler -fPIC -D_GLIBCXX_USE_CXX11_ABI=0 \
+               -o "$out_file" "$cu_file"
+          echo "Built: $out_file"
+          ls -lh "$out_file"
+
+      # ==================== Windows Build ====================
+      - name: Compile CUDA extension (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $cu_file = "src\DeepGPR\lib\deepgpr.cu"
+          $out_file = "src\DeepGPR\lib\deepgpr.dll"
+          nvcc -shared -o $out_file $cu_file
+          Write-Host "Built: $out_file"
+          Get-Item $out_file | Format-List Name, Length, LastWriteTime
+
+      # ==================== Install & Smoke Test ====================
+      - name: Install Python dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cu126
+          pip install numpy scipy
+
+      - name: Install DeepGPR
+        run: pip install -e .
+
+        continue-on-error: true
+
+      - name: Verify shared library loads (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          python -c "
+          import ctypes, os
+          lib_path = os.path.join('src', 'DeepGPR', 'lib', 'deepgpr.so')
+          lib = ctypes.cdll.LoadLibrary(os.path.abspath(lib_path))
+          print('deepgpr.so loaded successfully')
+          lib.forward.restype = None
+          lib.backward.restype = None
+          print('forward/backward symbols found')
+          "
+
+      - name: Verify shared library loads (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          python -c @"
+          import ctypes, os
+          lib_path = os.path.join('src', 'DeepGPR', 'lib', 'deepgpr.dll')
+          lib = ctypes.cdll.LoadLibrary(os.path.abspath(lib_path))
+          print('deepgpr.dll loaded successfully')
+          lib.forward.restype = None
+          lib.backward.restype = None
+          print('forward/backward symbols found')
+          "@
+
+      # ==================== Upload Artifacts ====================
+      - name: Upload shared library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepgpr-${{ matrix.platform }}-cuda${{ matrix.cuda }}
+          path: src/DeepGPR/lib/deepgpr${{ matrix.lib_ext }}
+          if-no-files-found: error
+          retention-days: 30

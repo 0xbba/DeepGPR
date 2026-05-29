@@ -36,6 +36,12 @@ jobs:
           cuda: ${{ matrix.cuda }}
           method: network
 
+      - name: Set up MSVC Developer Command Prompt
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -44,14 +50,36 @@ jobs:
       - name: Verify nvcc
         run: nvcc --version
 
+      - name: Verify cl.exe on Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          where.exe cl
+          cl
+
       # ==================== Linux Build ====================
       - name: Compile CUDA extension (Linux)
         if: matrix.platform == 'linux'
+        shell: bash
         run: |
+          set -e
+
           cu_file="src/DeepGPR/lib/deepgpr.cu"
           out_file="src/DeepGPR/lib/deepgpr.so"
+
+          if [ ! -f "$cu_file" ]; then
+            echo "CUDA source file not found: $cu_file"
+            exit 1
+          fi
+
           nvcc -shared -Xcompiler -fPIC -D_GLIBCXX_USE_CXX11_ABI=0 \
                -o "$out_file" "$cu_file"
+
+          if [ ! -f "$out_file" ]; then
+            echo "Build failed: $out_file was not generated"
+            exit 1
+          fi
+
           echo "Built: $out_file"
           ls -lh "$out_file"
 
@@ -60,48 +88,78 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $cu_file = "src\DeepGPR\lib\deepgpr.cu"
           $out_file = "src\DeepGPR\lib\deepgpr.dll"
+
+          if (-not (Test-Path $cu_file)) {
+            throw "CUDA source file not found: $cu_file"
+          }
+
           nvcc -shared -o $out_file $cu_file
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "nvcc failed with exit code $LASTEXITCODE"
+          }
+
+          if (-not (Test-Path $out_file)) {
+            throw "Build failed: $out_file was not generated"
+          }
+
           Write-Host "Built: $out_file"
           Get-Item $out_file | Format-List Name, Length, LastWriteTime
 
       # ==================== Install & Smoke Test ====================
       - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cu126
           pip install numpy scipy
 
       - name: Install DeepGPR
         run: pip install -e .
 
-        continue-on-error: true
-
       - name: Verify shared library loads (Linux)
         if: matrix.platform == 'linux'
+        shell: bash
         run: |
-          python -c "
-          import ctypes, os
-          lib_path = os.path.join('src', 'DeepGPR', 'lib', 'deepgpr.so')
-          lib = ctypes.cdll.LoadLibrary(os.path.abspath(lib_path))
-          print('deepgpr.so loaded successfully')
+          python - <<'PY'
+          import ctypes
+          import os
+
+          lib_path = os.path.abspath(os.path.join("src", "DeepGPR", "lib", "deepgpr.so"))
+
+          if not os.path.exists(lib_path):
+              raise FileNotFoundError(lib_path)
+
+          lib = ctypes.cdll.LoadLibrary(lib_path)
+          print("deepgpr.so loaded successfully")
+
           lib.forward.restype = None
           lib.backward.restype = None
-          print('forward/backward symbols found')
-          "
+          print("forward/backward symbols found")
+          PY
 
       - name: Verify shared library loads (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           python -c @"
-          import ctypes, os
-          lib_path = os.path.join('src', 'DeepGPR', 'lib', 'deepgpr.dll')
-          lib = ctypes.cdll.LoadLibrary(os.path.abspath(lib_path))
-          print('deepgpr.dll loaded successfully')
+          import ctypes
+          import os
+
+          lib_path = os.path.abspath(os.path.join("src", "DeepGPR", "lib", "deepgpr.dll"))
+
+          if not os.path.exists(lib_path):
+              raise FileNotFoundError(lib_path)
+
+          lib = ctypes.cdll.LoadLibrary(lib_path)
+          print("deepgpr.dll loaded successfully")
+
           lib.forward.restype = None
           lib.backward.restype = None
-          print('forward/backward symbols found')
+          print("forward/backward symbols found")
           "@
 
       # ==================== Upload Artifacts ====================
